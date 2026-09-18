@@ -3,7 +3,21 @@
 Ce fichier liste uniquement ce qu'il reste a relire ou modifier pour vendre
 l'application avec un tuto de mise en place simple : installation + Firebase.
 
-Derniere mise a jour : 2026-08-17.
+Derniere mise a jour : 2026-09-11 (agents assigned).
+
+## Agent Assignments
+- **senior-flutter**: CI fixes, ListTile/Material, version alignment
+- **senior-android**: Keystore, Redmi T10 testing, Firebase monitoring
+- **senior-ios**: macOS DMG testing, future iOS/PWA
+- **firebase-engineer**: Sync Firebase config, monitoring, rules
+- **data-engineer**: SQLite migrations, backup/restore, stock
+- **ui-ux-engineer**: Mobile cart, Tiko tutorial, responsive, ListTile fix
+- **platform-integration-engineer**: HelloAsso, PDF, GitHub updates, tilly-platform
+- **release-engineer**: CI/CD, versioning, artifacts, signing secrets
+- **qa-engineer**: Test strategy, CI alignment, device matrix
+- **secretary**: Auto-updates this file, AGENTS.md, README, docs
+- **reviewer**: Read-only reviews, blocks push on violations
+- **tech-writer**: MISE_EN_PLACE.md, user guides, non-tech testing
 
 ## Documentation a relire
 

@@ -4,7 +4,7 @@ const _dataEnvironmentSuffix = kReleaseMode ? '' : '_dev';
 const firebaseOrganizationId = 'default';
 const firebaseSnapshotId = kReleaseMode ? 'caisse-main' : 'caisse-dev';
 const githubOwner = 'Kaalister';
-const githubRepo = 'Tilly-caisse-app';
+const githubRepo = 'tilly-app';
 const appBuildVersion =
     String.fromEnvironment('APP_VERSION', defaultValue: '1.0.0');
 const latestReleaseApi =

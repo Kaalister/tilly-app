@@ -43,20 +43,20 @@ Pour les tags publies avec ce workflow, les liens publics directs vers la
 derniere release sont :
 
 - Android APK :
-  [Tilly-Android-latest.apk](https://github.com/Kaalister/Tilly-caisse-app/releases/latest/download/Tilly-Android-latest.apk)
+  [Tilly-Android-latest.apk](https://github.com/Kaalister/tilly-app/releases/latest/download/Tilly-Android-latest.apk)
 - Windows installateur :
-  [TillySetup-latest.exe](https://github.com/Kaalister/Tilly-caisse-app/releases/latest/download/TillySetup-latest.exe)
+  [TillySetup-latest.exe](https://github.com/Kaalister/tilly-app/releases/latest/download/TillySetup-latest.exe)
 - Windows portable :
-  [Tilly-Windows-latest.zip](https://github.com/Kaalister/Tilly-caisse-app/releases/latest/download/Tilly-Windows-latest.zip)
+  [Tilly-Windows-latest.zip](https://github.com/Kaalister/tilly-app/releases/latest/download/Tilly-Windows-latest.zip)
 - macOS :
-  [Tilly-macOS-latest.dmg](https://github.com/Kaalister/Tilly-caisse-app/releases/latest/download/Tilly-macOS-latest.dmg)
+  [Tilly-macOS-latest.dmg](https://github.com/Kaalister/tilly-app/releases/latest/download/Tilly-macOS-latest.dmg)
 
 Ces liens pointent vers les assets de GitHub Release et sont telechargeables
 sans compte GitHub lorsque le depot est public. Ne pas partager les liens
 `actions/runs/.../artifacts/...` de GitHub Actions : ils peuvent demander une
 connexion GitHub. Si la derniere release est anterieure a cette configuration,
 utiliser les fichiers versionnes depuis la page
-[Releases GitHub](https://github.com/Kaalister/Tilly-caisse-app/releases/latest).
+[Releases GitHub](https://github.com/Kaalister/tilly-app/releases/latest).
 
 L'interface est responsive : navigation basse et ecran vertical sur mobile,
 navigation laterale et panneaux multiples sur tablette ou ecran large.
@@ -67,7 +67,7 @@ navigation laterale et panneaux multiples sur tablette ou ecran large.
 
 1. Telecharger le dernier fichier
    `Tilly-Android-<version>.apk` depuis la page
-   [Releases GitHub](https://github.com/Kaalister/Tilly-caisse-app/releases/latest).
+   [Releases GitHub](https://github.com/Kaalister/tilly-app/releases/latest).
 2. Ouvrir le fichier APK sur le telephone.
 3. Autoriser l'installation d'applications provenant de cette source si
    Android le demande, puis installer l'application.
@@ -102,7 +102,7 @@ une mise a jour et ne permet pas cette conservation.
 ### Windows
 
 1. Telecharger `TillySetup-<version>.exe` depuis la page
-   [Releases GitHub](https://github.com/Kaalister/Tilly-caisse-app/releases/latest).
+   [Releases GitHub](https://github.com/Kaalister/tilly-app/releases/latest).
 2. Executer l'installateur et suivre l'assistant.
 3. Lancer **Tilly** depuis le menu Demarrer ou le raccourci
    cree pendant l'installation.
@@ -114,7 +114,7 @@ usage portable : extraire tout le dossier puis executer
 ### macOS
 
 1. Telecharger `Tilly-macOS-<version>.dmg` depuis la page
-   [Releases GitHub](https://github.com/Kaalister/Tilly-caisse-app/releases/latest).
+   [Releases GitHub](https://github.com/Kaalister/tilly-app/releases/latest).
 2. Ouvrir l'image disque et glisser **Tilly** dans **Applications**.
 3. Lancer **Tilly** depuis le dossier Applications.
 
@@ -145,6 +145,16 @@ une sauvegarde locale de securite. Aucun transfert ne se fait au demarrage.
 
 La procedure de creation et de configuration Firebase est detaillee dans
 [`documentation/FIREBASE_SETUP.md`](documentation/FIREBASE_SETUP.md).
+
+### Firebase monitoring developpeur, optionnel
+
+Le suivi des crashs et des utilisateurs actifs utilise un Firebase separe de
+la synchronisation configurable dans l'application. Il se configure au moment
+du build Android avec le `google-services.json` du projet monitoring, sans
+ecran de saisie dans l'application.
+
+La procedure est detaillee dans
+[`documentation/FIREBASE_MONITORING_SETUP.md`](documentation/FIREBASE_MONITORING_SETUP.md).
 
 ### Firebase monitoring developpeur, optionnel
 
@@ -222,8 +232,8 @@ Les versions exactes se trouvent dans [`pubspec.yaml`](pubspec.yaml).
 ### Recuperer et lancer le projet
 
 ```bash
-git clone https://github.com/Kaalister/Tilly-caisse-app.git
-cd Tilly-caisse-app
+git clone https://github.com/Kaalister/tilly-app.git
+cd tilly-app
 flutter doctor
 flutter pub get
 ```
