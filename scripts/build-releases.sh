@@ -29,7 +29,13 @@ RELEASE_DIR="/opt/releases/${VERSION}"
 SECRETS_DIR="/opt/tilly-secrets"
 ARTIFACT_DIR="${BUILD_DIR}/out"
 
+MARKETPLACE_STOPPED=0
 cleanup() {
+    if [[ "${MARKETPLACE_STOPPED}" == "1" ]]; then
+        docker compose -f /root/tilly-marketplace/compose.yaml start 2>/dev/null || true
+        systemctl start tilly-marketplace 2>/dev/null || true
+        log "Marketplace redemarre (cleanup)"
+    fi
     rm -rf "${BUILD_DIR}"
 }
 trap cleanup EXIT
@@ -81,12 +87,31 @@ log "Version ${VERSION} -> build_number ${build_number}"
 # ---------------------------------------------------------------------
 log "Build Android via Docker..."
 mkdir -p "${ARTIFACT_DIR}"
+
+# Liberer de la RAM sur les petits VPS : arret temporaire du marketplace
+stop_marketplace() {
+    systemctl stop tilly-marketplace 2>/dev/null || true
+    docker compose -f /root/tilly-marketplace/compose.yaml stop 2>/dev/null || true
+    MARKETPLACE_STOPPED=1
+    log "Marketplace arrete le temps du build (RAM faible)"
+}
+start_marketplace() {
+    if [[ "${MARKETPLACE_STOPPED}" == "1" ]]; then
+        docker compose -f /root/tilly-marketplace/compose.yaml start 2>/dev/null || true
+        systemctl start tilly-marketplace 2>/dev/null || true
+        log "Marketplace redemarre"
+    fi
+}
+stop_marketplace
+
 docker build \
     --build-arg APP_VERSION="${VERSION}" \
     --build-arg BUILD_NUMBER="${build_number}" \
     --target artifacts \
     --output "type=local,dest=${ARTIFACT_DIR}" \
     .
+
+start_marketplace
 
 if [[ -z "$(ls -A "${ARTIFACT_DIR}" 2>/dev/null)" ]]; then
     log "ERREUR: aucun artefact produit"

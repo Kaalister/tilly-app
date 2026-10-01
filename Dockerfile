@@ -30,7 +30,7 @@ COPY . .
 
 # Overrides pour VPS faible en RAM (2 Go) : limite la memoire de Gradle/Kotlin
 # (la derniere valeur de chaque cle gagne dans gradle.properties)
-RUN printf '\n# VPS low-memory overrides\norg.gradle.jvmargs=-Xmx1024m -XX:MaxMetaspaceSize=512m\norg.gradle.daemon=false\norg.gradle.parallel=false\norg.gradle.workers.max=1\nkotlin.daemon.jvmargs=-Xmx512m\n' >> android/gradle.properties
+RUN printf '\n# VPS low-memory overrides\norg.gradle.jvmargs=-Xmx768m -XX:MaxMetaspaceSize=384m\norg.gradle.daemon=false\norg.gradle.parallel=false\norg.gradle.workers.max=1\norg.gradle.vfs.watch=false\nkotlin.compiler.execution.strategy=in-process\nkotlin.daemon.jvmargs=-Xmx384m\n' >> android/gradle.properties
 
 ARG APP_VERSION
 ARG BUILD_NUMBER
