@@ -28,6 +28,10 @@ RUN flutter pub get
 # Reste du projet (secrets de signature deja places dans le contexte)
 COPY . .
 
+# Overrides pour VPS faible en RAM (2 Go) : limite la memoire de Gradle/Kotlin
+# (la derniere valeur de chaque cle gagne dans gradle.properties)
+RUN printf '\n# VPS low-memory overrides\norg.gradle.jvmargs=-Xmx1024m -XX:MaxMetaspaceSize=512m\norg.gradle.daemon=false\norg.gradle.parallel=false\norg.gradle.workers.max=1\nkotlin.daemon.jvmargs=-Xmx512m\n' >> android/gradle.properties
+
 ARG APP_VERSION
 ARG BUILD_NUMBER
 
