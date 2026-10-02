@@ -12,6 +12,7 @@ permissions:
 jobs:
   android-vps:
     name: Build Android sur VPS
+    if: false
     runs-on: ubuntu-latest
     timeout-minutes: 60
 
