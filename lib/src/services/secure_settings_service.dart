@@ -3,7 +3,6 @@ import 'dart:convert';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
 import '../domain/models.dart';
-import 'firebase_bootstrap.dart';
 
 class SecureSettingsService {
   static const _helloAssoSecretPrefix = 'helloasso_client_secret';
@@ -14,8 +13,8 @@ class SecureSettingsService {
     mOptions: MacOsOptions(usesDataProtectionKeychain: false),
   );
 
-  String get _helloAssoSecretKey =>
-      '${_helloAssoSecretPrefix}_${FirebaseBootstrap.currentUser?.uid ?? 'local'}';
+  String _helloAssoSecretKey(String? scope) =>
+      '${_helloAssoSecretPrefix}_${scope ?? 'local'}';
 
   Future<FirebaseSettings?> loadFirebaseSettings() async {
     try {
@@ -35,22 +34,42 @@ class SecureSettingsService {
       _storage.delete(key: _firebaseSettingsKey);
 
   Future<HelloAssoSettings> loadHelloAssoSettings(
-      HelloAssoSettings storedSettings) async {
+    HelloAssoSettings storedSettings, {
+    String? scope,
+  }) async {
     final legacySecret = storedSettings.clientSecret.trim();
     if (legacySecret.isNotEmpty) {
-      await _storage.write(key: _helloAssoSecretKey, value: legacySecret);
+      await _storage.write(
+          key: _helloAssoSecretKey(scope), value: legacySecret);
       return storedSettings;
     }
-    final secret = await _storage.read(key: _helloAssoSecretKey) ?? '';
-    return storedSettings.withSecret(secret);
+    final scoped = await _storage.read(key: _helloAssoSecretKey(scope)) ?? '';
+    if (scoped.isNotEmpty) return storedSettings.withSecret(scoped);
+    if (scope != null) {
+      // One-time adoption of the pre-scope secret by the first licence account.
+      final fallback =
+          await _storage.read(key: _helloAssoSecretKey(null)) ?? '';
+      if (fallback.isNotEmpty) {
+        await _storage.write(key: _helloAssoSecretKey(scope), value: fallback);
+        await _storage.delete(key: _helloAssoSecretKey(null));
+        return storedSettings.withSecret(fallback);
+      }
+    }
+    return storedSettings.withSecret('');
   }
 
-  Future<void> saveHelloAssoSecret(String value) async {
+  Future<void> saveHelloAssoSecret(String value, {String? scope}) async {
     final secret = value.trim();
     if (secret.isEmpty) {
-      await _storage.delete(key: _helloAssoSecretKey);
+      await _storage.delete(key: _helloAssoSecretKey(scope));
     } else {
-      await _storage.write(key: _helloAssoSecretKey, value: secret);
+      await _storage.write(key: _helloAssoSecretKey(scope), value: secret);
     }
   }
+
+  // Generic read/write/delete for license service
+  Future<String?> read({required String key}) => _storage.read(key: key);
+  Future<void> write({required String key, required String value}) =>
+      _storage.write(key: key, value: value);
+  Future<void> delete({required String key}) => _storage.delete(key: key);
 }

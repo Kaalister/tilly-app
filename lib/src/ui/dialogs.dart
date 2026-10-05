@@ -1068,7 +1068,7 @@ class _CategoryDialogState extends State<_CategoryDialog> {
 
 Future<void> showArticleDialog(BuildContext context, AppController controller,
     {Article? article}) async {
-  final categoryOptions = <String>[...controller.activeArticleCategories]
+  final categoryOptions = <String>[...controller.allArticleCategories]
       .map((category) => category.trim().toUpperCase())
       .where((category) => category.isNotEmpty)
       .toSet()

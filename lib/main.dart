@@ -1,7 +1,9 @@
 import 'dart:io' show Platform;
 
+import 'package:flutter/foundation.dart' show kDebugMode;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:sqflite/sqflite.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart' as sqflite_ffi;
 
@@ -12,10 +14,8 @@ import 'src/services/secure_settings_service.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  await _loadEnvironment();
   await _lockPhoneToPortrait();
-  // macOS uses the native sqflite_darwin plugin, just like Android. Replacing
-  // its already-registered factory with the FFI factory triggers a warning and
-  // can affect plugins that share sqflite's global factory.
   if (Platform.isWindows || Platform.isLinux) {
     sqflite_ffi.sqfliteFfiInit();
     databaseFactory = sqflite_ffi.databaseFactoryFfi;
@@ -24,6 +24,17 @@ Future<void> main() async {
   final firebaseSettings = await SecureSettingsService().loadFirebaseSettings();
   await FirebaseBootstrap.initialize(firebaseSettings);
   runApp(const TillyApp());
+}
+
+Future<void> _loadEnvironment() async {
+  try {
+    await dotenv.load(
+      fileName: kDebugMode ? '.env.dev' : '.env',
+      isOptional: true,
+    );
+  } catch (_) {
+    // Falls back to the compiled defaults in app_config.dart.
+  }
 }
 
 Future<void> _lockPhoneToPortrait() async {

@@ -8,6 +8,20 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:path/path.dart' as path;
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
+import 'package:cryptography/cryptography.dart';
+import 'package:flutter_dotenv/flutter_dotenv.dart';
+import 'package:http/http.dart' as http;
+import 'package:http/testing.dart';
+import 'package:tilly/src/config/app_config.dart';
+import 'package:tilly/src/services/license/license_api.dart';
+import 'package:tilly/src/services/license/license_models.dart';
+import 'package:tilly/src/services/license/license_service.dart';
+import 'package:tilly/src/services/license/license_store.dart';
+import 'package:tilly/src/services/license/license_verifier.dart';
+import 'package:tilly/src/services/license/machine_id.dart';
+import 'package:tilly/src/ui/pages/activation_page.dart';
+import 'package:tilly/src/ui/pages/license_blocked_page.dart';
+
 class _MemoryAppController extends AppController {
   _MemoryAppController() {
     loading = false;
@@ -109,10 +123,150 @@ class _FailingDatabase extends LocalDatabase {
   }
 }
 
+class _MockLicenseService extends LicenseService {
+  _MockLicenseService({LicenseState state = LicenseState.licenseValid})
+      : _state = state,
+        super(secureStorage: _MockSecureStorage());
+
+  final LicenseState _state;
+
+  @override
+  LicenseState get currentState => _state;
+
+  @override
+  bool get isLicensed =>
+      _state == LicenseState.licenseValid ||
+      _state == LicenseState.offlineGracePeriod;
+
+  @override
+  bool get requiresOnlineValidation =>
+      _state == LicenseState.serverValidationRequired ||
+      _state == LicenseState.clockTampered;
+
+  @override
+  bool get isReadOnly =>
+      requiresOnlineValidation ||
+      _state == LicenseState.versionNotCovered;
+
+  @override
+  String? get coveredVersion => '2.1';
+
+  @override
+  bool get isBlocked =>
+      _state == LicenseState.machineRevoked ||
+      _state == LicenseState.machineLimitReached ||
+      _state == LicenseState.licenseExpired ||
+      _state == LicenseState.invalidSignature ||
+      _state == LicenseState.invalidMachine;
+
+  @override
+  String? get userEmail => 'contact@tilly.orceus.fr';
+
+  @override
+  String getStateMessage() {
+    switch (_state) {
+      case LicenseState.serverValidationRequired:
+        return 'Connexion Internet nécessaire pour vérifier votre licence';
+      case LicenseState.machineRevoked:
+        return "Cet appareil n'est plus autorisé";
+      case LicenseState.noSubscription:
+        return 'Aucun abonnement en cours trouvé';
+      default:
+        return 'Tilly est activé';
+    }
+  }
+
+  @override
+  Future<({LicenseState state, String? error})> loginAndActivate({
+    required String email,
+    required String password,
+  }) async => (state: LicenseState.licenseValid, error: null);
+
+  @override
+  Future<({LicenseState state, String? error})> validateOnline() async =>
+      (state: _state, error: null);
+
+  bool loggedOut = false;
+
+  @override
+  Future<void> logout() async {
+    loggedOut = true;
+  }
+
+  @override
+  Future<void> refreshLicense() async {}
+}
+
+class _MemorySecureStorage extends SecureSettingsService {
+  final Map<String, String> values = {};
+
+  @override
+  Future<String?> read({required String key}) async => values[key];
+
+  @override
+  Future<void> write({required String key, required String value}) async {
+    values[key] = value;
+  }
+
+  @override
+  Future<void> delete({required String key}) async {
+    values.remove(key);
+  }
+
+  @override
+  Future<HelloAssoSettings> loadHelloAssoSettings(
+    HelloAssoSettings storedSettings, {
+    String? scope,
+  }) async =>
+      storedSettings;
+
+  @override
+  Future<void> saveHelloAssoSecret(String value, {String? scope}) async {}
+}
+
+class _MockSecureStorage extends SecureSettingsService {
+  @override
+  Future<String?> read({required String key}) async => null;
+
+  @override
+  Future<void> write({required String key, required String value}) async {}
+
+  @override
+  Future<void> delete({required String key}) async {}
+
+  @override
+  Future<FirebaseSettings?> loadFirebaseSettings() async => null;
+
+  @override
+  Future<void> saveFirebaseSettings(FirebaseSettings settings) async {}
+
+  @override
+  Future<void> clearFirebaseSettings() async {}
+
+  @override
+  Future<HelloAssoSettings> loadHelloAssoSettings(
+    HelloAssoSettings storedSettings, {
+    String? scope,
+  }) async =>
+      storedSettings;
+
+  @override
+  Future<void> saveHelloAssoSecret(String value, {String? scope}) async {}
+}
+
+late SimpleKeyPair _licenseKeyPair;
+late String _licensePublicKeyBase64;
+
+LicenseVerifier _testVerifier() =>
+    LicenseVerifier(publicKeys: {'k1': _licensePublicKeyBase64});
+
 void main() {
-  setUpAll(() {
+  setUpAll(() async {
     sqfliteFfiInit();
     databaseFactory = databaseFactoryFfi;
+    _licenseKeyPair = await Ed25519().newKeyPair();
+    final publicKey = await _licenseKeyPair.extractPublicKey();
+    _licensePublicKeyBase64 = base64Url.encode(publicKey.bytes);
   });
 
   test('money formats French euro display', () {
@@ -806,6 +960,551 @@ void main() {
     expect(options.iosBundleId, 'com.tilly.caisse');
   });
 
+  test('license API URL comes from the bundled env files', () async {
+    expect(dotenv.isInitialized, isFalse);
+    expect(licenseApiBaseUrl, 'http://localhost:3000');
+
+    await dotenv.load(fileName: '.env.dev');
+    expect(licenseApiBaseUrl, 'http://localhost:3000');
+
+    await dotenv.load(fileName: '.env');
+    expect(licenseApiBaseUrl, 'https://tilly.orceus.fr');
+
+    dotenv.clean();
+  });
+
+  test('license login hides connection failure details', () async {
+    final api = LicenseApiClient(
+      client: MockClient((_) async => throw SocketException('refused')),
+    );
+
+    await expectLater(
+      api.login(email: 'user@example.com', password: 'secret'),
+      throwsA(
+        isA<LicenseApiException>()
+            .having((e) => e.state, 'state', 'network_error')
+            .having(
+              (e) => e.message,
+              'message',
+              'Impossible de joindre le serveur. Vérifie ta connexion Internet.',
+            )
+            .having(
+              (e) => e.message,
+              'no technical detail',
+              isNot(contains('SocketException')),
+            ),
+      ),
+    );
+  });
+
+  test('license login maps server errors to a friendly message', () async {
+    final api = LicenseApiClient(
+      client: MockClient((_) async => http.Response('{}', 500)),
+    );
+
+    await expectLater(
+      api.login(email: 'user@example.com', password: 'secret'),
+      throwsA(
+        isA<LicenseApiException>()
+            .having((e) => e.state, 'state', 'server_error')
+            .having(
+              (e) => e.message,
+              'message',
+              'Le serveur est momentanément indisponible. Réessaie dans quelques instants.',
+            ),
+      ),
+    );
+  });
+
+  test('license login keeps wrong credentials message simple', () async {
+    final api = LicenseApiClient(
+      client: MockClient(
+        (_) async => http.Response('{"state":"invalid_credentials"}', 401),
+      ),
+    );
+
+    await expectLater(
+      api.login(email: 'user@example.com', password: 'secret'),
+      throwsA(
+        isA<LicenseApiException>().having(
+          (e) => e.message,
+          'message',
+          'E-mail ou mot de passe incorrect.',
+        ),
+      ),
+    );
+  });
+
+  test('license activation maps refusals to simple messages', () async {
+    final api = LicenseApiClient(
+      client: MockClient(
+        (_) async => http.Response('{"state":"MACHINE_LIMIT_REACHED"}', 409),
+      ),
+    );
+
+    await expectLater(
+      api.activate(
+        token: 'token',
+        machineInfo: const MachineInfo(
+          machineId: 'MCH-8f14e45f-ceea-467a-9a3c-1b2d3e4f5a6b',
+          platform: 'MACOS',
+          appVersion: '1.0.0',
+        ),
+      ),
+      throwsA(
+        isA<LicenseApiException>()
+            .having((e) => e.state, 'state', 'MACHINE_LIMIT_REACHED')
+            .having(
+              (e) => e.message,
+              'message',
+              'Trop d\'appareils sont associés à cette licence.',
+            ),
+      ),
+    );
+  });
+
+  test('machine fingerprint is lowercase sha-256 hex', () async {
+    final service = MachineIdService(_MemorySecureStorage());
+    final hash = await service.generateFingerprintHash();
+
+    expect(hash, isNotNull);
+    expect(RegExp(r'^[0-9a-f]{64}$').hasMatch(hash!), isTrue);
+  });
+
+  test('license activation maps validation errors to a simple message',
+      () async {
+    final api = LicenseApiClient(
+      client: MockClient(
+        (_) async => http.Response(
+          '{"type":"validation_error","title":"Requête invalide",'
+          '"status":422,"errors":{"fingerprintHash":["Format invalide."]}}',
+          422,
+          headers: {'content-type': 'application/json'},
+        ),
+      ),
+    );
+
+    await expectLater(
+      api.activate(
+        token: 'token',
+        machineInfo: const MachineInfo(
+          machineId: 'MCH-8f14e45f-ceea-467a-9a3c-1b2d3e4f5a6b',
+          platform: 'ANDROID',
+          appVersion: '1.0.0',
+        ),
+      ),
+      throwsA(
+        isA<LicenseApiException>()
+            .having((e) => e.state, 'state', 'validation_error')
+            .having(
+              (e) => e.message,
+              'message',
+              'Vérifie les informations saisies.',
+            ),
+      ),
+    );
+  });
+
+  test('lifetime license is valid offline', () async {
+    const machineId = 'MCH-8f14e45f-ceea-467a-9a3c-1b2d3e4f5a6b';
+    final state = await _testVerifier().verify(
+      envelope: await _licenseEnvelope(machineId: machineId),
+      localMachineId: machineId,
+      appVersion: '1.0.0',
+      now: DateTime.now(),
+    );
+    expect(state, LicenseState.licenseValid);
+  });
+
+  test('lifetime license stays valid 10 years offline', () async {
+    const machineId = 'MCH-8f14e45f-ceea-467a-9a3c-1b2d3e4f5a6b';
+    final state = await _testVerifier().verify(
+      envelope: await _licenseEnvelope(machineId: machineId),
+      localMachineId: machineId,
+      appVersion: '1.0.0',
+      now: DateTime.now().add(const Duration(days: 3650)),
+    );
+    expect(state, LicenseState.licenseValid);
+  });
+
+  test('lifetime covers patches of the covered version', () async {
+    const machineId = 'MCH-8f14e45f-ceea-467a-9a3c-1b2d3e4f5a6b';
+    final state = await _testVerifier().verify(
+      envelope: await _licenseEnvelope(
+        machineId: machineId,
+        coveredVersion: '2.1',
+      ),
+      localMachineId: machineId,
+      appVersion: '2.1.9',
+      now: DateTime.now(),
+    );
+    expect(state, LicenseState.licenseValid);
+  });
+
+  test('lifetime does not cover a newer minor version', () async {
+    const machineId = 'MCH-8f14e45f-ceea-467a-9a3c-1b2d3e4f5a6b';
+    final state = await _testVerifier().verify(
+      envelope: await _licenseEnvelope(
+        machineId: machineId,
+        coveredVersion: '2.1',
+      ),
+      localMachineId: machineId,
+      appVersion: '2.2.0',
+      now: DateTime.now(),
+    );
+    expect(state, LicenseState.versionNotCovered);
+  });
+
+  test('subscription is valid inside its offline window', () async {
+    const machineId = 'MCH-8f14e45f-ceea-467a-9a3c-1b2d3e4f5a6b';
+    final now = DateTime.now();
+    final state = await _testVerifier().verify(
+      envelope: await _licenseEnvelope(
+        machineId: machineId,
+        licenseType: 'SUBSCRIPTION',
+        coveredVersion: null,
+        offlineValidUntil: now.add(const Duration(days: 5)),
+        licenseValidUntil: now.add(const Duration(days: 20)),
+      ),
+      localMachineId: machineId,
+      appVersion: '9.9.9',
+      now: now,
+    );
+    expect(state, LicenseState.licenseValid);
+  });
+
+  test('subscription falls into the offline grace period', () async {
+    const machineId = 'MCH-8f14e45f-ceea-467a-9a3c-1b2d3e4f5a6b';
+    final now = DateTime.now();
+    final state = await _testVerifier().verify(
+      envelope: await _licenseEnvelope(
+        machineId: machineId,
+        licenseType: 'SUBSCRIPTION',
+        coveredVersion: null,
+        offlineValidUntil: now.subtract(const Duration(minutes: 30)),
+        licenseValidUntil: now.add(const Duration(days: 20)),
+      ),
+      localMachineId: machineId,
+      appVersion: '1.0.0',
+      now: now,
+    );
+    expect(state, LicenseState.offlineGracePeriod);
+  });
+
+  test('subscription requires online validation after the grace', () async {
+    const machineId = 'MCH-8f14e45f-ceea-467a-9a3c-1b2d3e4f5a6b';
+    final now = DateTime.now();
+    final state = await _testVerifier().verify(
+      envelope: await _licenseEnvelope(
+        machineId: machineId,
+        licenseType: 'SUBSCRIPTION',
+        coveredVersion: null,
+        offlineValidUntil: now.subtract(const Duration(hours: 3)),
+        licenseValidUntil: now.add(const Duration(days: 20)),
+      ),
+      localMachineId: machineId,
+      appVersion: '1.0.0',
+      now: now,
+    );
+    expect(state, LicenseState.serverValidationRequired);
+  });
+
+  test('tampered signature is rejected', () async {
+    const machineId = 'MCH-8f14e45f-ceea-467a-9a3c-1b2d3e4f5a6b';
+    final envelope = await _licenseEnvelope(machineId: machineId);
+    final state = await _testVerifier().verify(
+      envelope: LicenseEnvelope(
+        kid: 'k1',
+        payload: envelope.payload,
+        signature: base64Url.encode(List<int>.filled(64, 7)),
+      ),
+      localMachineId: machineId,
+      appVersion: '1.0.0',
+      now: DateTime.now(),
+    );
+    expect(state, LicenseState.invalidSignature);
+  });
+
+  test('tampered payload is rejected', () async {
+    const machineId = 'MCH-8f14e45f-ceea-467a-9a3c-1b2d3e4f5a6b';
+    final envelope = await _licenseEnvelope(machineId: machineId);
+    final json = jsonDecode(utf8.decode(base64UrlDecodeBytes(envelope.payload)))
+        as Map<String, dynamic>;
+    json['offlineValidUntil'] = '2099-01-01T00:00:00.000Z';
+    final state = await _testVerifier().verify(
+      envelope: LicenseEnvelope(
+        kid: 'k1',
+        payload: base64Url.encode(utf8.encode(jsonEncode(json))),
+        signature: envelope.signature,
+      ),
+      localMachineId: machineId,
+      appVersion: '1.0.0',
+      now: DateTime.now(),
+    );
+    expect(state, LicenseState.invalidSignature);
+  });
+
+  test('unknown signing key is rejected', () async {
+    const machineId = 'MCH-8f14e45f-ceea-467a-9a3c-1b2d3e4f5a6b';
+    final envelope = await _licenseEnvelope(machineId: machineId);
+    final state = await _testVerifier().verify(
+      envelope: LicenseEnvelope(
+        kid: 'k9',
+        payload: envelope.payload,
+        signature: envelope.signature,
+      ),
+      localMachineId: machineId,
+      appVersion: '1.0.0',
+      now: DateTime.now(),
+    );
+    expect(state, LicenseState.invalidSignature);
+  });
+
+  test('license bound to another machine is rejected', () async {
+    final state = await _testVerifier().verify(
+      envelope: await _licenseEnvelope(
+        machineId: 'MCH-bbbbbbbb-cccc-dddd-eeee-ffffffffffff',
+      ),
+      localMachineId: 'MCH-8f14e45f-ceea-467a-9a3c-1b2d3e4f5a6b',
+      appVersion: '1.0.0',
+      now: DateTime.now(),
+    );
+    expect(state, LicenseState.invalidMachine);
+  });
+
+  test('rewound clock is rejected', () async {
+    const machineId = 'MCH-8f14e45f-ceea-467a-9a3c-1b2d3e4f5a6b';
+    final now = DateTime.now();
+    final state = await _testVerifier().verify(
+      envelope: await _licenseEnvelope(machineId: machineId),
+      localMachineId: machineId,
+      appVersion: '1.0.0',
+      now: now,
+      lastServerTime: now.add(const Duration(days: 2)),
+    );
+    expect(state, LicenseState.clockTampered);
+  });
+
+  test('missing license reports no license', () async {
+    final service = LicenseService(
+      secureStorage: _MemorySecureStorage(),
+      apiClient: LicenseApiClient(
+        client: MockClient((_) async => http.Response('{}', 404)),
+      ),
+      verifier: _testVerifier(),
+    );
+    addTearDown(service.dispose);
+
+    await service.initialize();
+    expect(service.currentState, LicenseState.noLicense);
+  });
+
+  test('network failure during validation keeps the local state', () async {
+    const machineId = 'MCH-8f14e45f-ceea-467a-9a3c-1b2d3e4f5a6b';
+    final storage = _MemorySecureStorage()
+      ..values['tilly_license_machine_id'] = machineId
+      ..values['tilly_license_auth_token'] = 'token-1';
+    final store = LicenseStore(storage);
+    final secret = await store.getOrCreateDeviceSecret();
+    await store.saveEnvelope(await _licenseEnvelope(machineId: machineId));
+    await store.saveState(await store.signState(
+      lastValidatedAt: DateTime.now(),
+      lastServerTime: DateTime.now(),
+      machineId: machineId,
+      deviceSecret: secret,
+    ));
+
+    final api = LicenseApiClient(
+      client: MockClient((request) async {
+        if (request.url.path.endsWith('/license/validate')) {
+          throw const SocketException('offline');
+        }
+        return http.Response('{}', 404);
+      }),
+    );
+
+    final service = LicenseService(
+      secureStorage: storage,
+      apiClient: api,
+      verifier: _testVerifier(),
+    );
+    addTearDown(service.dispose);
+    await service.initialize();
+    await Future<void>.delayed(const Duration(milliseconds: 50));
+
+    expect(service.isLicensed, isTrue);
+
+    final result = await service.validateOnline();
+    expect(result.state, LicenseState.licenseValid);
+    expect(service.isLicensed, isTrue);
+  });
+
+  test('read-only mode keeps the data exportable', () async {
+    final tempDirectory =
+        await Directory.systemTemp.createTemp('tilly-export-');
+    final database =
+        LocalDatabase(databaseDirectoryOverride: tempDirectory.path);
+    final controller = AppController(
+      database: database,
+      secureSettings: _MemorySecureStorage(),
+    );
+    addTearDown(() async {
+      await database.close();
+      await tempDirectory.delete(recursive: true);
+    });
+
+    await controller.load();
+    await controller.addPlayer(
+      firstName: 'Alice',
+      lastName: 'Martin',
+      email: '',
+      type: 'public',
+    );
+
+    controller.readOnly = true;
+    final payload = await controller.fullBackupPayload();
+
+    expect(jsonEncode(payload), contains('Alice'));
+  });
+
+  test('license state hmac round-trips after signing', () async {
+    final store = LicenseStore(_MemorySecureStorage());
+    final secret = await store.getOrCreateDeviceSecret();
+    final signed = await store.signState(
+      lastValidatedAt: DateTime(2026, 10, 1, 14, 30),
+      lastServerTime: DateTime.utc(2026, 10, 1, 12, 30),
+      machineId: 'MCH-8f14e45f-ceea-467a-9a3c-1b2d3e4f5a6b',
+      deviceSecret: secret,
+    );
+
+    expect(await store.verifyStateHmac(signed, secret), isTrue);
+    final tampered = LicenseStateData(
+      lastValidatedAt: signed.lastValidatedAt!.add(const Duration(hours: 1)),
+      lastServerTime: signed.lastServerTime,
+      lastMachineId: signed.lastMachineId,
+      hmac: signed.hmac,
+    );
+    expect(await store.verifyStateHmac(tampered, secret), isFalse);
+  });
+
+  test('license activation succeeds and stays valid', () async {
+    const machineId = 'MCH-8f14e45f-ceea-467a-9a3c-1b2d3e4f5a6b';
+    final storage = _MemorySecureStorage()
+      ..values['tilly_license_machine_id'] = machineId;
+    final envelope = await _licenseEnvelope(
+      machineId: machineId,
+      features: const ['sales', 'stock'],
+    );
+
+    final api = LicenseApiClient(
+      client: MockClient((request) async {
+        if (request.url.path.endsWith('/auth/login')) {
+          return http.Response(
+            jsonEncode({
+              'authenticated': true,
+              'user': {'id': 'user-1', 'email': 'user@example.com'},
+              'token': 'token-1',
+              'expiresAt': '2026-10-08T12:00:00.000Z',
+            }),
+            200,
+            headers: {'content-type': 'application/json'},
+          );
+        }
+        if (request.url.path.endsWith('/license/activate')) {
+          return http.Response(
+            jsonEncode({
+              'data': {
+                'granted': true,
+                'state': 'ACTIVATED',
+                'license': envelope.toJson(),
+                'machine': {
+                  'machineId': machineId,
+                  'platform': 'ANDROID',
+                  'appVersion': '1.0.0',
+                  'firstSeenAt': '2026-10-01T12:00:00.000Z',
+                  'lastSeenAt': '2026-10-01T12:00:00.000Z',
+                  'revokedAt': null,
+                  'revokedReason': null,
+                },
+              },
+            }),
+            200,
+            headers: {'content-type': 'application/json'},
+          );
+        }
+        return http.Response('{}', 404);
+      }),
+    );
+
+    final service = LicenseService(
+      secureStorage: storage,
+      apiClient: api,
+      verifier: _testVerifier(),
+    );
+    addTearDown(service.dispose);
+    await service.initialize();
+
+    final result = await service.loginAndActivate(
+      email: 'user@example.com',
+      password: 'secret-password',
+    );
+
+    expect(result.error, isNull);
+    expect(result.state, LicenseState.licenseValid);
+    expect(service.isLicensed, isTrue);
+  });
+
+  test('license activation without subscription returns a typed state',
+      () async {
+    final storage = _MemorySecureStorage()
+      ..values['tilly_license_machine_id'] =
+          'MCH-8f14e45f-ceea-467a-9a3c-1b2d3e4f5a6b';
+    final api = LicenseApiClient(
+      client: MockClient((request) async {
+        if (request.url.path.endsWith('/auth/login')) {
+          return http.Response(
+            jsonEncode({
+              'authenticated': true,
+              'user': {'id': 'user-1', 'email': 'user@example.com'},
+              'token': 'token-1',
+              'expiresAt': '2026-10-08T12:00:00.000Z',
+            }),
+            200,
+            headers: {'content-type': 'application/json'},
+          );
+        }
+        return http.Response(
+          '{"type":"license_not_found","title":"Aucune licence","status":404,'
+          '"state":"NOT_FOUND","detail":"Aucune licence active pour ce compte."}',
+          404,
+          headers: {'content-type': 'application/json'},
+        );
+      }),
+    );
+
+    final service = LicenseService(
+      secureStorage: storage,
+      apiClient: api,
+      verifier: _testVerifier(),
+    );
+    addTearDown(service.dispose);
+    await service.initialize();
+
+    final result = await service.loginAndActivate(
+      email: 'user@example.com',
+      password: 'secret-password',
+    );
+
+    expect(result.state, LicenseState.noSubscription);
+    expect(
+      result.error,
+      'Aucun abonnement en cours trouvé. '
+      'Vérifie ton compte sur tilly.orceus.fr.',
+    );
+    expect(service.isLicensed, isFalse);
+    expect(service.getStateMessage(), 'Aucun abonnement en cours trouvé');
+  });
+
   test('empty modern backups are rejected before replacement', () {
     expect(
       () => validateBackupPayload({
@@ -864,6 +1563,7 @@ void main() {
         home: Scaffold(
           body: ConfigPage(
             controller: controller,
+            licenseService: _MockLicenseService(),
             updateResult: null,
             checkingUpdate: false,
             onCheckUpdate: () {},
@@ -894,6 +1594,7 @@ void main() {
         home: Scaffold(
           body: ConfigPage(
             controller: controller,
+            licenseService: _MockLicenseService(),
             updateResult: null,
             checkingUpdate: false,
             onCheckUpdate: () {},
@@ -932,6 +1633,7 @@ void main() {
         home: Scaffold(
           body: ConfigPage(
             controller: controller,
+            licenseService: _MockLicenseService(),
             updateResult: null,
             checkingUpdate: false,
             onCheckUpdate: () {},
@@ -997,7 +1699,7 @@ void main() {
     await tester.pumpWidget(
       MaterialApp(
         theme: caisseTheme(AppColors.accent),
-        home: RootShell(controller: controller),
+        home: RootShell(controller: controller, licenseService: _MockLicenseService()),
       ),
     );
     await tester.pumpAndSettle();
@@ -1063,7 +1765,7 @@ void main() {
     await tester.pumpWidget(
       MaterialApp(
         theme: caisseTheme(AppColors.accent),
-        home: RootShell(controller: controller),
+        home: RootShell(controller: controller, licenseService: _MockLicenseService()),
       ),
     );
     await tester.pumpAndSettle();
@@ -1140,20 +1842,21 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('player dialog adds participant without email', (tester) async {
+testWidgets('player dialog adds participant without email', (tester) async {
     final controller = _MemoryAppController();
 
     await tester.pumpWidget(
       MaterialApp(
         theme: caisseTheme(AppColors.accent),
-        home: Scaffold(body: PlayersPage(controller: controller)),
+        home: RootShell(controller: controller, licenseService: _MockLicenseService()),
       ),
     );
 
     await tester.tap(find.text('Ajouter un participant'));
     await tester.pumpAndSettle();
-    await tester.enterText(find.byType(TextField).at(0), 'Alice');
-    await tester.enterText(find.byType(TextField).at(1), 'Martin');
+    // Use more specific finders to target the dialog's TextFields
+    await tester.enterText(find.widgetWithText(TextField, 'Prénom'), 'Alice');
+    await tester.enterText(find.widgetWithText(TextField, 'Nom'), 'Martin');
     await tester.tap(find.text('Enregistrer'));
     await tester.pump(kThemeAnimationDuration);
     await tester.pumpAndSettle();
@@ -1440,6 +2143,621 @@ void main() {
     expect(clearButtonBottom, lessThanOrEqualTo(783));
     expect(tester.takeException(), isNull);
   });
+
+  testWidgets('blocked device shows only the logout screen', (tester) async {
+    final controller = _MemoryAppController()..tutorialWelcomeSeen = true;
+    final license =
+        _MockLicenseService(state: LicenseState.machineRevoked);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: caisseTheme(AppColors.accent),
+        home: RootShell(controller: controller, licenseService: license),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.byType(LicenseBlockedPage), findsOneWidget);
+    expect(find.byType(ActivationPage), findsNothing);
+    expect(find.text('Se déconnecter'), findsOneWidget);
+    expect(find.text('Se connecter'), findsNothing);
+    expect(find.text("Cet appareil n'est plus autorisé"), findsOneWidget);
+    expect(find.text('Ouvrir mon compte'), findsOneWidget);
+    expect(find.textContaining('Réactivez-le depuis votre compte Tilly'),
+        findsOneWidget);
+
+    await tester.tap(find.text('Se déconnecter'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Confirmer'));
+    await tester.pumpAndSettle();
+
+    expect(license.loggedOut, isTrue);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('config account section shows the connected account',
+      (tester) async {
+    final controller = _MemoryAppController();
+    final license = _MockLicenseService();
+    tester.view.physicalSize = const Size(1600, 1000);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: caisseTheme(AppColors.accent),
+        home: Scaffold(
+          body: ConfigPage(
+            controller: controller,
+            licenseService: license,
+            updateResult: null,
+            checkingUpdate: false,
+            onCheckUpdate: () {},
+            onOpenUpdate: (_) async {},
+          ),
+        ),
+      ),
+    );
+
+    await tester.tap(find.text('Compte'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('contact@tilly.orceus.fr'), findsOneWidget);
+
+    await tester.tap(find.text('Se déconnecter'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Confirmer'));
+    await tester.pumpAndSettle();
+
+    expect(license.loggedOut, isTrue);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('activation page explains a revoked machine', (tester) async {
+    final controller = _MemoryAppController();
+
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: caisseTheme(AppColors.accent),
+        home: ActivationPage(
+          licenseService:
+              _MockLicenseService(state: LicenseState.machineRevoked),
+          controller: controller,
+        ),
+      ),
+    );
+
+    expect(find.text("Cet appareil n'est plus autorisé"), findsOneWidget);
+    expect(find.text('Se connecter'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('activation page shows Tilly image and simple sign-in button',
+      (tester) async {
+    final controller = _MemoryAppController();
+
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: caisseTheme(AppColors.accent),
+        home: ActivationPage(
+          licenseService: _MockLicenseService(),
+          controller: controller,
+        ),
+      ),
+    );
+
+    expect(find.byType(Image), findsOneWidget);
+    expect(find.text('Se connecter'), findsOneWidget);
+    expect(find.text('Se connecter et activer'), findsNothing);
+    expect(find.text('Tilli'), findsNothing);
+    expect(tester.takeException(), isNull);
+  });
+
+  test('read-only mode blocks business mutations', () async {
+    final article = Article(
+      id: 'article-1',
+      category: 'BOISSONS',
+      type: 'standard',
+      icon: '',
+      name: 'Eau',
+      price: 2,
+      memberPrice: 1.5,
+      stock: 3,
+      threshold: 1,
+    );
+    final player = Player(id: 'player-1', name: 'Participant', type: 'public');
+    final controller = AppController()
+      ..activeSession = SessionRecord(
+        id: 'session-1',
+        name: 'Session test',
+        eventDate: DateTime(2026, 10, 1),
+      )
+      ..players = [player]
+      ..articles = [article]
+      ..readOnly = true;
+    controller
+      ..selectPlayer(player)
+      ..addToCart(article);
+
+    await expectLater(controller.checkout('ESP'), throwsStateError);
+    expect(controller.sales, isEmpty);
+    expect(article.stock, 3);
+  });
+
+  test('license account URL targets the site account page', () {
+    expect(licenseAccountUrl, 'https://tilly.orceus.fr/compte');
+  });
+
+  test('machine id survives logout and re-login', () async {
+    final storage = _MemorySecureStorage();
+    final api = LicenseApiClient(
+      client: MockClient((_) async => http.Response('{}', 404)),
+    );
+    final service = LicenseService(
+      secureStorage: storage,
+      apiClient: api,
+      verifier: _testVerifier(),
+    );
+    addTearDown(service.dispose);
+
+    await service.initialize();
+    final machineId = storage.values['tilly_license_machine_id'];
+
+    expect(machineId, isNotNull);
+    expect(
+      RegExp(r'^MCH-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$')
+          .hasMatch(machineId!),
+      isTrue,
+    );
+
+    await service.logout();
+    expect(storage.values['tilly_license_machine_id'], machineId);
+
+    final second = LicenseService(
+      secureStorage: storage,
+      apiClient: LicenseApiClient(
+        client: MockClient((_) async => http.Response('{}', 404)),
+      ),
+    );
+    addTearDown(second.dispose);
+    await second.initialize();
+    expect(storage.values['tilly_license_machine_id'], machineId);
+  });
+
+  test('logout clears locally without any server call', () async {
+    const machineId = 'MCH-8f14e45f-ceea-467a-9a3c-1b2d3e4f5a6b';
+    final storage = _MemorySecureStorage()
+      ..values['tilly_license_machine_id'] = machineId
+      ..values['tilly_license_auth_token'] = 'token-1';
+    final store = LicenseStore(storage);
+    final secret = await store.getOrCreateDeviceSecret();
+    await store.saveEnvelope(await _licenseEnvelope(machineId: machineId));
+    await store.saveState(await store.signState(
+      lastValidatedAt: DateTime.now(),
+      lastServerTime: DateTime.now(),
+      machineId: machineId,
+      deviceSecret: secret,
+    ));
+
+    var calls = 0;
+    var revokeCalled = false;
+    final api = LicenseApiClient(
+      client: MockClient((request) async {
+        calls++;
+        if (request.url.path.contains('deactivate')) revokeCalled = true;
+        if (request.url.path.endsWith('/license/validate')) {
+          return http.Response(
+            await _licenseResponseBody(machineId),
+            200,
+            headers: {'content-type': 'application/json'},
+          );
+        }
+        return http.Response('{}', 404);
+      }),
+    );
+
+    final service = LicenseService(
+      secureStorage: storage,
+      apiClient: api,
+      verifier: _testVerifier(),
+    );
+    addTearDown(service.dispose);
+    await service.initialize();
+
+    for (var attempt = 0; attempt < 50 && calls == 0; attempt++) {
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+    }
+    expect(service.isLicensed, isTrue);
+    expect(service.accountId, 'user-1');
+
+    final callsBeforeLogout = calls;
+    await service.logout();
+    await Future<void>.delayed(const Duration(milliseconds: 50));
+
+    expect(calls, callsBeforeLogout);
+    expect(revokeCalled, isFalse);
+    expect(service.isLicensed, isFalse);
+    expect(service.accountId, isNull);
+    expect(storage.values['tilly_license_auth_token'], isNull);
+    expect(storage.values['tilly_license_envelope'], isNull);
+  });
+
+  test('license accounts use separate local datasets', () async {
+    final tempDirectory =
+        await Directory.systemTemp.createTemp('tilly-scope-');
+    final database =
+        LocalDatabase(databaseDirectoryOverride: tempDirectory.path);
+    final controller = AppController(
+      database: database,
+      secureSettings: _MemorySecureStorage(),
+    );
+    addTearDown(() async {
+      await database.close();
+      await tempDirectory.delete(recursive: true);
+    });
+
+    await controller.switchDataScope('account-a');
+    await controller.load();
+    await controller.addPlayer(
+      firstName: 'Alice',
+      lastName: 'Martin',
+      email: '',
+      type: 'public',
+    );
+    expect(controller.players, hasLength(1));
+
+    await controller.switchDataScope('account-b');
+    expect(controller.players, isEmpty);
+
+    await controller.switchDataScope('account-a');
+    expect(controller.players.single.name, 'Alice Martin');
+  });
+
+  test('first license account adopts the pre-scope local data', () async {
+    final tempDirectory =
+        await Directory.systemTemp.createTemp('tilly-adopt-');
+    final legacy = LocalDatabase(databaseDirectoryOverride: tempDirectory.path);
+    final legacyController = AppController(
+      database: legacy,
+      secureSettings: _MemorySecureStorage(),
+    );
+    await legacyController.load();
+    await legacyController.addPlayer(
+      firstName: 'Alice',
+      lastName: 'Martin',
+      email: '',
+      type: 'public',
+    );
+    await legacy.close();
+
+    final database =
+        LocalDatabase(databaseDirectoryOverride: tempDirectory.path);
+    final controller = AppController(
+      database: database,
+      secureSettings: _MemorySecureStorage(),
+    );
+    addTearDown(() async {
+      await database.close();
+      await tempDirectory.delete(recursive: true);
+    });
+
+    await controller.switchDataScope('account-a');
+    await controller.load();
+    expect(controller.players.single.name, 'Alice Martin');
+
+    await controller.switchDataScope('account-b');
+    expect(controller.players, isEmpty);
+  });
+
+  test('revoked machine activation is terminal with a single call', () async {
+    const machineId = 'MCH-8f14e45f-ceea-467a-9a3c-1b2d3e4f5a6b';
+    final storage = _MemorySecureStorage()
+      ..values['tilly_license_machine_id'] = machineId;
+
+    var loginCalls = 0;
+    var activateCalls = 0;
+    var reactivateCalls = 0;
+    String? activateMachineId;
+    final api = LicenseApiClient(
+      client: MockClient((request) async {
+        final path = request.url.path;
+        if (path.contains('reactivate')) reactivateCalls++;
+        if (path.endsWith('/auth/login')) {
+          loginCalls++;
+          return http.Response(
+            jsonEncode({
+              'authenticated': true,
+              'user': {'id': 'user-1', 'email': 'user@example.com'},
+              'token': 'token-1',
+              'expiresAt': '2026-10-08T12:00:00.000Z',
+            }),
+            200,
+            headers: {'content-type': 'application/json'},
+          );
+        }
+        if (path.endsWith('/license/activate')) {
+          activateCalls++;
+          activateMachineId =
+              (jsonDecode(request.body) as Map)['machineId'] as String?;
+          return http.Response(
+            '{"type":"machine_revoked","title":"Appareil révoqué","status":403,'
+            '"state":"MACHINE_REVOKED","detail":"Cet appareil a été révoqué."}',
+            403,
+            headers: {'content-type': 'application/json'},
+          );
+        }
+        return http.Response('{}', 404);
+      }),
+    );
+
+    final service = LicenseService(
+      secureStorage: storage,
+      apiClient: api,
+      verifier: _testVerifier(),
+    );
+    addTearDown(service.dispose);
+    await service.initialize();
+
+    final result = await service.loginAndActivate(
+      email: 'user@example.com',
+      password: 'secret-password',
+    );
+
+    expect(result.state, LicenseState.machineRevoked);
+    expect(result.error, isNotNull);
+    expect(loginCalls, 1);
+    expect(activateCalls, 1);
+    expect(reactivateCalls, 0);
+    expect(activateMachineId, machineId);
+    expect(service.isBlocked, isTrue);
+
+    await service.validateOnline();
+    await Future<void>.delayed(const Duration(milliseconds: 20));
+    expect(activateCalls, 1);
+    expect(reactivateCalls, 0);
+  });
+
+  test('revoked machine stops further network attempts', () async {
+    const machineId = 'MCH-8f14e45f-ceea-467a-9a3c-1b2d3e4f5a6b';
+    final storage = _MemorySecureStorage()
+      ..values['tilly_license_machine_id'] = machineId
+      ..values['tilly_license_auth_token'] = 'token-1';
+    final store = LicenseStore(storage);
+    final secret = await store.getOrCreateDeviceSecret();
+    await store.saveEnvelope(await _licenseEnvelope(machineId: machineId));
+    await store.saveState(await store.signState(
+      lastValidatedAt: DateTime.now().subtract(const Duration(hours: 7)),
+      lastServerTime: DateTime.now().subtract(const Duration(hours: 7)),
+      machineId: machineId,
+      deviceSecret: secret,
+    ));
+
+    var validateCalls = 0;
+    var otherCalls = 0;
+    final api = LicenseApiClient(
+      client: MockClient((request) async {
+        if (request.url.path.endsWith('/license/validate')) {
+          validateCalls++;
+          return http.Response(
+            '{"type":"machine_revoked","title":"Appareil révoqué","status":403,'
+            '"state":"MACHINE_REVOKED","detail":"Cet appareil a été révoqué."}',
+            403,
+            headers: {'content-type': 'application/json'},
+          );
+        }
+        otherCalls++;
+        return http.Response('{}', 404);
+      }),
+    );
+
+    final service = LicenseService(
+      secureStorage: storage,
+      apiClient: api,
+      verifier: _testVerifier(),
+    );
+    addTearDown(service.dispose);
+    await service.initialize();
+
+    for (var attempt = 0; attempt < 50 && validateCalls == 0; attempt++) {
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+    }
+
+    expect(validateCalls, 1);
+    expect(service.currentState, LicenseState.machineRevoked);
+
+    await Future<void>.delayed(const Duration(milliseconds: 100));
+    expect(validateCalls, 1);
+    expect(otherCalls, 0);
+
+    await service.validateOnline();
+    expect(validateCalls, 1);
+  });
+
+  test('license validates online at every app startup', () async {
+    const machineId = 'MCH-8f14e45f-ceea-467a-9a3c-1b2d3e4f5a6b';
+    final storage = _MemorySecureStorage()
+      ..values['tilly_license_machine_id'] = machineId
+      ..values['tilly_license_auth_token'] = 'token-1';
+    final store = LicenseStore(storage);
+    final secret = await store.getOrCreateDeviceSecret();
+    await store.saveEnvelope(await _licenseEnvelope(machineId: machineId));
+    await store.saveState(await store.signState(
+      lastValidatedAt: DateTime.now().subtract(const Duration(minutes: 5)),
+      lastServerTime: DateTime.now().subtract(const Duration(minutes: 5)),
+      machineId: machineId,
+      deviceSecret: secret,
+    ));
+
+    var validateCalls = 0;
+    final api = LicenseApiClient(
+      client: MockClient((request) async {
+        if (request.url.path.endsWith('/license/validate')) {
+          validateCalls++;
+          return http.Response(
+            await _licenseResponseBody(machineId),
+            200,
+            headers: {'content-type': 'application/json'},
+          );
+        }
+        return http.Response('{}', 404);
+      }),
+    );
+
+    final service = LicenseService(
+      secureStorage: storage,
+      apiClient: api,
+      verifier: _testVerifier(),
+    );
+    addTearDown(service.dispose);
+    await service.initialize();
+
+    for (var attempt = 0; attempt < 50 && validateCalls == 0; attempt++) {
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+    }
+
+    expect(validateCalls, 1);
+    expect(service.isLicensed, isTrue);
+  });
+
+  test('license skips startup validation without a session', () async {
+    final storage = _MemorySecureStorage();
+    var validateCalls = 0;
+    final api = LicenseApiClient(
+      client: MockClient((request) async {
+        if (request.url.path.endsWith('/license/validate')) validateCalls++;
+        return http.Response('{}', 404);
+      }),
+    );
+
+    final service = LicenseService(
+      secureStorage: storage,
+      apiClient: api,
+      verifier: _testVerifier(),
+    );
+    addTearDown(service.dispose);
+    await service.initialize();
+    await Future<void>.delayed(const Duration(milliseconds: 50));
+
+    expect(validateCalls, 0);
+    expect(service.isLicensed, isFalse);
+  });
+
+  testWidgets('license banner is hidden while the license is valid',
+      (tester) async {
+    final controller = _MemoryAppController()
+      ..tutorialWelcomeSeen = true
+      ..tutorialPagesSeen = {...AppTabIds.configurable, AppTabIds.sales};
+
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: caisseTheme(AppColors.accent),
+        home: RootShell(
+          controller: controller,
+          licenseService: _MockLicenseService(),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(
+      find.text('Connexion Internet nécessaire pour vérifier votre licence'),
+      findsNothing,
+    );
+    expect(find.text('Se connecter'), findsNothing);
+    expect(find.textContaining('Mode hors ligne'), findsNothing);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('version banner appears when the version is not covered',
+      (tester) async {
+    final controller = _MemoryAppController()
+      ..tutorialWelcomeSeen = true
+      ..tutorialPagesSeen = {...AppTabIds.configurable, AppTabIds.sales};
+
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: caisseTheme(AppColors.accent),
+        home: RootShell(
+          controller: controller,
+          licenseService: _MockLicenseService(
+            state: LicenseState.versionNotCovered,
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.byType(ActivationPage), findsNothing);
+    expect(
+      find.textContaining('couvre Tilly jusqu\'à la version 2.1'),
+      findsOneWidget,
+    );
+    expect(find.text('Télécharger la version 2.1'), findsOneWidget);
+    expect(controller.readOnly, isTrue);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('license banner appears when online validation is required',
+      (tester) async {
+    final controller = _MemoryAppController()
+      ..tutorialWelcomeSeen = true
+      ..tutorialPagesSeen = {...AppTabIds.configurable, AppTabIds.sales};
+
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: caisseTheme(AppColors.accent),
+        home: RootShell(
+          controller: controller,
+          licenseService: _MockLicenseService(
+            state: LicenseState.serverValidationRequired,
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.byType(ActivationPage), findsNothing);
+    expect(
+      find.text('Connexion Internet nécessaire pour vérifier votre licence'),
+      findsOneWidget,
+    );
+    expect(find.text('Se connecter'), findsOneWidget);
+    expect(controller.readOnly, isTrue);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('activation page does not overflow with keyboard and error',
+      (tester) async {
+    final controller = _MemoryAppController();
+
+    tester.view.physicalSize = const Size(393, 783);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    addTearDown(tester.view.resetViewInsets);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: caisseTheme(AppColors.accent),
+        home: ActivationPage(
+          licenseService: _MockLicenseService(),
+          controller: controller,
+        ),
+      ),
+    );
+
+    await tester.tap(find.text('Se connecter'));
+    await tester.pump();
+
+    expect(find.text('Renseigne ton e-mail et ton mot de passe.'),
+        findsOneWidget);
+
+    tester.view.viewInsets = const FakeViewPadding(bottom: 360);
+    await tester.pump(const Duration(milliseconds: 300));
+
+    expect(tester.takeException(), isNull);
+  });
 }
 
 Sale _sale({required String id}) => Sale(
@@ -1526,4 +2844,58 @@ HelloAssoSettings _helloAssoSettingsFromPayload(Map<String, dynamic> payload) {
       orElse: () => const {});
   return HelloAssoSettings.fromJson(
       Map<String, dynamic>.from(jsonDecode('${row['value'] ?? '{}'}') as Map));
+}
+
+Future<LicenseEnvelope> _licenseEnvelope({
+  required String machineId,
+  String licenseType = 'LIFETIME',
+  String? coveredVersion = '9.9',
+  String? userId = 'user-1',
+  DateTime? licenseValidUntil,
+  DateTime? offlineValidUntil,
+  List<String> features = const ['sales'],
+  DateTime? issuedAt,
+}) async {
+  final issued = issuedAt ?? DateTime.utc(2026, 10, 1, 12);
+  final payloadBytes = utf8.encode(jsonEncode({
+    'version': 1,
+    'licenseId': 'license-1',
+    'userId': userId,
+    'machineId': machineId,
+    'product': 'tilly',
+    'licenseType': licenseType,
+    'coveredVersion': coveredVersion,
+    'issuedAt': issued.toIso8601String(),
+    'serverTime': issued.toIso8601String(),
+    'licenseValidUntil': licenseValidUntil?.toIso8601String(),
+    'offlineValidUntil': offlineValidUntil?.toIso8601String(),
+    'features': features,
+  }));
+  final signature =
+      await Ed25519().sign(payloadBytes, keyPair: _licenseKeyPair);
+  return LicenseEnvelope(
+    kid: 'k1',
+    payload: base64Url.encode(payloadBytes),
+    signature: base64Url.encode(signature.bytes),
+  );
+}
+
+Future<String> _licenseResponseBody(String machineId) async {
+  final envelope = await _licenseEnvelope(machineId: machineId);
+  return jsonEncode({
+    'data': {
+      'granted': true,
+      'state': 'VALID',
+      'license': envelope.toJson(),
+      'machine': {
+        'machineId': machineId,
+        'platform': 'ANDROID',
+        'appVersion': '1.0.0',
+        'firstSeenAt': '2026-10-01T12:00:00.000Z',
+        'lastSeenAt': '2026-10-01T12:00:00.000Z',
+        'revokedAt': null,
+        'revokedReason': null,
+      },
+    },
+  });
 }

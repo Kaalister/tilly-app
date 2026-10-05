@@ -30,6 +30,9 @@ synchronisation entre appareils et l'import d'inscrits a un evenement.
 - Suivi developpeur Android optionnel avec Firebase Analytics et Crashlytics.
 - Verification des mises a jour publiees sur GitHub dans les builds release
   Android, Windows et macOS.
+- Licence Tilly par compte (achat a vie pour une version ou abonnement) avec
+  activation de l'appareil, fonctionnement hors ligne et gestion des appareils
+  depuis le site.
 
 ## Plateformes
 
@@ -134,6 +137,36 @@ lancement via clic droit sur l'application, puis **Ouvrir**.
 4. Saisir les fonds de caisse debut/fin et consulter l'analyse especes.
 5. Exporter les bilans PDF et une sauvegarde JSON avant archivage ou transfert
    vers un autre appareil.
+
+### Licence et activation
+
+L'application demande une licence liee au compte de l'association
+(https://tilly.orceus.fr). Au premier lancement, saisir l'e-mail et le mot de
+passe du compte puis cliquer sur **Se connecter** : l'appareil est active.
+
+- **Licence a vie** : achetee pour une version precise (par exemple 2.1). Elle
+  fonctionne hors ligne sans limite de duree ; les versions ulterieures ne sont
+  pas couvertes.
+- **Abonnement** : couvre toutes les versions tant qu'il est actif et autorise
+  30 jours de fonctionnement hors ligne avant revalidation.
+
+Etats particuliers :
+
+- **Version non couverte** : l'app est en lecture seule (donnees consultables et
+  exportables) et propose de telecharger la version couverte.
+- **Appareil desactive** : message avec **Ouvrir mon compte** ; la reactivation
+  se fait uniquement depuis le site.
+- **Abonnement hors ligne** : bandeau **Se connecter** pour revalider.
+- **Limite d'appareils atteinte** (5 par defaut) : gerer les appareils depuis le
+  site.
+
+Dans **Config > Compte**, le bouton **Se deconnecter** retire le compte de
+l'appareil sans toucher aux donnees. Chaque compte Tilly possede ses propres
+donnees locales : changer de compte change les donnees affichees. La
+desactivation d'un appareil ne peut pas etre faite depuis l'application.
+
+Le guide association est detaille dans
+[`documentation/MISE_EN_PLACE.md`](documentation/MISE_EN_PLACE.md).
 
 ### Firebase, optionnel
 
@@ -266,6 +299,38 @@ de connecter le compte utilisateur dans un seul parcours. Les paramètres sont
 conservés dans le stockage sécurisé de l'appareil. Activer Firebase
 Authentication par email/mot de passe et Cloud Firestore comme expliqué dans
 [`documentation/FIREBASE_SETUP.md`](documentation/FIREBASE_SETUP.md).
+
+### Configuration de l'API de licence
+
+L'URL de base de l'API de licence est lue depuis un fichier `.env` embarque
+avec l'application :
+
+| Fichier | Build | Valeur par defaut |
+| --- | --- | --- |
+| `.env.dev` | debug (`flutter run`) | `http://localhost:3000` |
+| `.env` | profile et release | `https://tilly.orceus.fr` |
+
+Pour tester la production depuis un build debug, modifier `.env.dev`. A
+l'inverse, ne jamais placer l'URL locale dans `.env` : ce fichier est embarque
+dans les builds de release, donc dans les APK, ZIP et DMG distribues.
+
+Si le fichier est absent ou illisible, l'application retombe sur les valeurs
+compilees dans `lib/src/config/app_config.dart`.
+
+#### Backend local selon la plateforme
+
+- macOS, Windows et Linux : `http://localhost:3000` fonctionne tel quel.
+- Emulateur Android : `localhost` designe l'emulateur, pas le Mac. En debug,
+  l'application remplace automatiquement `localhost` et `127.0.0.1` par
+  `10.0.2.2` (adresse de la machine hote vue par l'emulateur). Le trafic HTTP
+  en clair est autorise uniquement dans le manifest debug.
+- Appareil Android physique : renseigner l'adresse locale du poste de
+  developpement dans `.env.dev`, par exemple
+  `LICENSE_API_URL=http://192.168.1.128:3000`, puis reconstruire l'application.
+  Le telephone et le poste doivent etre sur le meme reseau.
+
+Une modification de `.env.dev` necessite un redemarrage complet de
+l'application (`flutter run`), pas un simple hot reload.
 
 ### Verification
 

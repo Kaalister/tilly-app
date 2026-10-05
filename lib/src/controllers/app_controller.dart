@@ -16,18 +16,22 @@ import '../ui/theme.dart';
 import '../utils/iterable_extensions.dart';
 
 class AppController extends ChangeNotifier implements PersistableAppState {
-  AppController({LocalDatabase? database})
-      : _database = database ?? LocalDatabase();
+  AppController({
+    LocalDatabase? database,
+    SecureSettingsService? secureSettings,
+  })  : _database = database ?? LocalDatabase(),
+        _secureSettings = secureSettings ?? SecureSettingsService();
 
   final LocalDatabase _database;
   final FirebaseSyncService _syncService = FirebaseSyncService();
-  final SecureSettingsService _secureSettings = SecureSettingsService();
+  final SecureSettingsService _secureSettings;
   final HelloAssoImportService _helloAssoImport = HelloAssoImportService();
   final MealService _mealService = MealService();
   final StockService _stockService = StockService();
 
   bool loading = true;
   bool syncing = false;
+  bool readOnly = false;
   String syncStatus = FirebaseBootstrap.initialized
       ? 'Firebase prêt'
       : (FirebaseBootstrap.error ?? 'Firebase non configuré');
@@ -92,13 +96,17 @@ class AppController extends ChangeNotifier implements PersistableAppState {
       selectedPlayer != null && hasPendingPayment && cartStockShortages.isEmpty;
   List<StockShortage> get cartStockShortages =>
       _stockService.shortages(_stockService.cartRequirements(cart, articles));
-  List<String> get activeArticleCategories => mealsEnabled
-      ? articleCategories
-      : articleCategories.where((category) => category != 'REPAS').toList();
-  List<String> get categories => ['TOUS', ...activeArticleCategories];
-  List<Article> get activeArticles => mealsEnabled
-      ? articles
-      : articles.where((article) => article.category != 'REPAS').toList();
+List<String> get activeArticleCategories => articleCategories
+      .where((category) => category != 'REPAS')
+      .toList();
+List<String> get categories => ['TOUS', ...activeArticleCategories];
+List<String> get mealCategories => ['REPAS'];
+List<String> get allArticleCategories => articleCategories;
+  List<Article> get activeArticles =>
+      articles.where((article) => article.category != 'REPAS').toList();
+
+  List<Article> get trackedArticles =>
+      articles.where((article) => article.type == 'standard' && article.threshold > 0).toList();
   List<Sale> get activeSales =>
       sales.where((sale) => sale.isActive).toList(growable: false);
   List<Article> get visibleArticles => categoryFilter == 'TOUS'
@@ -115,9 +123,33 @@ class AppController extends ChangeNotifier implements PersistableAppState {
       .toList();
   bool isMainTabVisible(String id) => appSettings.isMainTabVisible(id);
 
+  // Local dataset identifier: one SQLite file per licence account, so two
+  // associations using the same device never share their data.
+  String? _dataScope;
+  String? get dataScope => _dataScope;
+  Future<void> _scopeTask = Future<void>.value();
+
+  /// Sets the dataset without loading it (used before the first [load]).
+  /// Later calls switch and reload the dataset (login / logout).
+  Future<void> switchDataScope(String? scope) {
+    if (_dataScope == scope && _database.isScopedTo(scope)) {
+      return Future<void>.value();
+    }
+    _dataScope = scope;
+    if (loading) return Future<void>.value();
+    _scopeTask = _scopeTask.then((_) async {
+      await _database.adoptLegacyDataIfNeeded(scope);
+      await _database.setUserScope(scope);
+      await _loadLocalState();
+      notifyListeners();
+    });
+    return _scopeTask;
+  }
+
   Future<void> load() async {
     try {
-      await _database.setUserScope(FirebaseBootstrap.currentUser?.uid);
+      await _database.adoptLegacyDataIfNeeded(_dataScope);
+      await _database.setUserScope(_dataScope);
       await _loadLocalState();
       FirebaseMonitoringService.setContextKey('current_tab', _tabId(tab));
       FirebaseMonitoringService.logAction('app_loaded', context: {
@@ -152,8 +184,8 @@ class AppController extends ChangeNotifier implements PersistableAppState {
     appSettings = await _database.loadAppSettings();
     tutorialWelcomeSeen = await _database.loadTutorialWelcomeSeen();
     tutorialPagesSeen = await _database.loadTutorialPagesSeen();
-    helloAssoSettings =
-        await _secureSettings.loadHelloAssoSettings(storedHelloAssoSettings);
+    helloAssoSettings = await _secureSettings
+        .loadHelloAssoSettings(storedHelloAssoSettings, scope: _dataScope);
     if (storedHelloAssoSettings.clientSecret.trim().isNotEmpty) {
       await _database.saveHelloAssoSettings(
           storedHelloAssoSettings.withoutSecret(),
@@ -248,7 +280,7 @@ class AppController extends ChangeNotifier implements PersistableAppState {
             : storedCategories);
         final storedHelloAssoSettings = await _database.loadHelloAssoSettings();
         helloAssoSettings = await _secureSettings
-            .loadHelloAssoSettings(storedHelloAssoSettings);
+            .loadHelloAssoSettings(storedHelloAssoSettings, scope: _dataScope);
         await _loadActiveSessionState();
         await refreshSessionSales();
       }
@@ -283,29 +315,15 @@ class AppController extends ChangeNotifier implements PersistableAppState {
     notifyListeners();
 
     try {
-      Map<String, dynamic>? seedPayload;
-      if (!_database.isScopedTo(user.uid) &&
-          !(await _database.hasOnlyBootstrapData())) {
-        seedPayload = await _database.exportAll();
-      }
-
+      // The Firebase account is only used as a sync backend for the current
+      // licence dataset: it never changes the local data scope.
       var remoteExists = true;
       try {
         remoteExists = await _syncService.hasRemoteSnapshot();
       } catch (_) {
         remoteExists = true;
       }
-      await _database.setUserScope(user.uid);
-
-      await _loadLocalState();
-      if (seedPayload != null &&
-          !remoteExists &&
-          await _database.hasOnlyBootstrapData()) {
-        await _database.replaceFromExport(seedPayload);
-        await _database.markLocalUpdated();
-        await _loadLocalState();
-      }
-      const result = FirebaseSyncResult(FirebaseSyncAction.unchanged,
+      final result = FirebaseSyncResult(FirebaseSyncAction.unchanged,
           'Compte connecte. Utilise Synchroniser pour transferer les donnees.');
       FirebaseMonitoringService.logAction('firebase_user_connected',
           context: {'remote_exists': remoteExists});
@@ -328,8 +346,6 @@ class AppController extends ChangeNotifier implements PersistableAppState {
     if (FirebaseBootstrap.initialized) {
       await FirebaseBootstrap.auth.signOut();
     }
-    await _database.setUserScope(null);
-    await _loadLocalState();
     lastSyncedAt = null;
     syncStatus = 'Connexion Firebase requise';
     notifyListeners();
@@ -348,8 +364,6 @@ class AppController extends ChangeNotifier implements PersistableAppState {
       await _secureSettings.saveFirebaseSettings(settings);
       await FirebaseBootstrap.reconfigure(settings);
       firebaseSettings = settings;
-      await _database.setUserScope(null);
-      await _loadLocalState();
       if (!FirebaseBootstrap.initialized) {
         throw StateError(FirebaseBootstrap.error ??
             'Impossible d initialiser Firebase avec cette configuration');
@@ -371,8 +385,6 @@ class AppController extends ChangeNotifier implements PersistableAppState {
       await FirebaseBootstrap.reset();
       await _secureSettings.clearFirebaseSettings();
       firebaseSettings = const FirebaseSettings();
-      await _database.setUserScope(null);
-      await _loadLocalState();
       lastSyncedAt = null;
       syncStatus = 'Firebase non configuré';
     } finally {
@@ -582,7 +594,8 @@ class AppController extends ChangeNotifier implements PersistableAppState {
   Future<void> saveHelloAssoSettings(HelloAssoSettings settings) async {
     helloAssoSettings = settings;
     notifyListeners();
-    await _secureSettings.saveHelloAssoSecret(settings.clientSecret);
+    await _secureSettings.saveHelloAssoSecret(settings.clientSecret,
+        scope: _dataScope);
     await _database.saveHelloAssoSettings(settings.withoutSecret());
     if (_syncService.isAvailable) {
       syncStatus = 'Modifications locales non synchronisees';
@@ -996,6 +1009,28 @@ class AppController extends ChangeNotifier implements PersistableAppState {
         ));
   }
 
+  Future<void> unserveMeal(MealOrder meal) async {
+    if (meal.status != 'served') return;
+    await updateMeal(
+        meal,
+        meal.copyWith(
+          status: 'prepared',
+          servedAt: null,
+          updatedAt: DateTime.now(),
+        ));
+  }
+
+  Future<void> unprepareMeal(MealOrder meal) async {
+    if (meal.status != 'prepared') return;
+    await updateMeal(
+        meal,
+        meal.copyWith(
+          status: 'planned',
+          preparedAt: null,
+          updatedAt: DateTime.now(),
+        ));
+  }
+
   Future<void> cancelMeal(MealOrder meal) async {
     final index = meals.indexWhere((entry) => entry.id == meal.id);
     if (index < 0) return;
@@ -1318,6 +1353,10 @@ class AppController extends ChangeNotifier implements PersistableAppState {
   }
 
   Future<void> _commitMutation(void Function() mutation) async {
+    if (readOnly) {
+      throw StateError(
+          'Licence à vérifier : reconnecte-toi à Internet pour continuer.');
+    }
     final snapshot = _AppMutationSnapshot.capture(this);
     try {
       mutation();

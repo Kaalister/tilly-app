@@ -67,7 +67,70 @@ Pour conserver les donnees :
 4. Ne pas desinstaller l'application.
 5. Ne pas effacer les donnees de l'application.
 
-## 3. Comprendre Firebase
+## 3. Activer Tilly avec votre compte
+
+Depuis la version 2, Tilly demande une licence pour fonctionner. La licence est
+liee au compte de l'association cree sur https://tilly.orceus.fr.
+
+### 3.1 Premier lancement
+
+1. Installer l'application (voir la section 1).
+2. Au premier ecran, saisir l'e-mail et le mot de passe du compte Tilly de
+   l'association.
+3. Cliquer sur `Se connecter`.
+4. L'application active l'appareil et affiche l'ecran d'accueil.
+
+Une fois active, l'application fonctionne hors ligne. Internet n'est necessaire
+que pour la premiere activation, la revalidation d'un abonnement et la
+verification des appareils autorises.
+
+### 3.2 Deux types de licence
+
+- **Licence a vie** : achetee pour une version precise (par exemple 2.1).
+  L'application fonctionne hors ligne sans limite de duree. Les versions
+  ulterieures ne sont pas couvertes.
+- **Abonnement** : couvre toutes les versions pendant la duree de l'abonnement.
+  Sans connexion, l'application continue de fonctionner pendant une fenetre de
+  grace de 30 jours, puis demande une connexion pour verifier que l'abonnement
+  est toujours actif.
+
+### 3.3 Appareils
+
+Le compte inclut un nombre d'appareils autorises (5 par defaut). Chaque appareil
+est identifie par un identifiant unique cree au premier lancement : il reste le
+meme tant que l'application est installee.
+
+La gestion des appareils et de l'abonnement se fait uniquement depuis le site :
+https://tilly.orceus.fr/compte
+
+### 3.4 Messages affiches par l'application
+
+- **Version non couverte** : une licence a vie achetee pour la version 2.1
+  n'autorise pas la version 2.5. L'application passe en lecture seule : les
+  donnees restent visibles et exportables, mais aucune operation de caisse n'est
+  possible. Il faut revenir a la version couverte ou faire evoluer la licence.
+- **Appareil desactive** : l'appareil a ete retire depuis le site. L'application
+  propose `Ouvrir mon compte` pour le reactiver. La reactivation n'est possible
+  que depuis le site.
+- **Connexion Internet necessaire** : la fenetre hors ligne de l'abonnement est
+  depassee. L'application reste consultable en lecture seule et le bouton
+  `Se connecter` revalide la licence.
+- **Limite d'appareils atteinte** : trop d'appareils utilisent ce compte.
+  Utiliser `Ouvrir mon compte` pour en liberer un.
+
+### 3.5 Se deconnecter
+
+Dans `Config > Compte`, le bouton `Se deconnecter` retire le compte de cet
+appareil. Les donnees de l'association restent enregistrees localement.
+
+Chaque compte Tilly possede ses propres donnees locales sur l'appareil : en
+changeant de compte, l'application affiche les donnees de ce compte. Pour
+retrouver les donnees du compte precedent, il suffit de se reconnecter avec lui.
+
+La desactivation d'un appareil (retrait definitif) se fait uniquement depuis le
+site Tilly, jamais depuis l'application.
+
+## 4. Comprendre Firebase
 
 Firebase est optionnel.
 
@@ -94,7 +157,7 @@ Deux informations sont demandees pendant l'activation :
 L'application reunit ces deux etapes dans un seul ecran. La configuration du
 projet n'est pas un deuxieme mot de passe.
 
-## 4. Creer le projet Firebase
+## 5. Creer le projet Firebase
 
 1. Aller sur https://console.firebase.google.com/
 2. Cliquer sur `Ajouter un projet`.
@@ -108,7 +171,7 @@ verifies sur la page officielle :
 
 https://firebase.google.com/pricing
 
-## 5. Activer l'authentification
+## 6. Activer l'authentification
 
 1. Dans Firebase Console, ouvrir `Authentication`.
 2. Cliquer sur `Commencer`.
@@ -120,7 +183,7 @@ Documentation officielle :
 
 https://firebase.google.com/docs/auth/flutter/password-auth
 
-## 6. Creer le compte de l'association
+## 7. Creer le compte de l'association
 
 1. Aller dans `Authentication > Users`.
 2. Cliquer sur `Ajouter un utilisateur`.
@@ -130,7 +193,7 @@ https://firebase.google.com/docs/auth/flutter/password-auth
 
 Ce compte servira a se connecter dans l'application.
 
-## 7. Activer Firestore
+## 8. Activer Firestore
 
 1. Dans Firebase Console, ouvrir `Firestore Database`.
 2. Cliquer sur `Creer une base de donnees`.
@@ -138,7 +201,7 @@ Ce compte servira a se connecter dans l'application.
 4. Choisir une region proche de l'association.
 5. Terminer la creation.
 
-## 8. Configurer les regles Firestore
+## 9. Configurer les regles Firestore
 
 Dans `Firestore Database > Rules`, coller des regles limitees a l'utilisateur
 connecte.
@@ -173,13 +236,13 @@ Documentation officielle :
 
 https://firebase.google.com/docs/firestore/security/get-started
 
-## 9. Recuperer la configuration Firebase
+## 10. Recuperer la configuration Firebase
 
 La configuration depend de la plateforme. Android, Windows et macOS
 appartiennent au meme projet Firebase, mais utilisent des applications
 Firebase differentes.
 
-### 9.1 Android
+### 10.1 Android
 
 1. Revenir a la vue d'ensemble du projet Firebase.
 2. Cliquer sur `Ajouter une application`, puis sur l'icone Android.
@@ -205,7 +268,7 @@ Documentation officielle :
 
 https://firebase.google.com/docs/android/setup
 
-### 9.2 Windows
+### 10.2 Windows
 
 Firebase ne propose pas d'application Windows dans ce parcours. La caisse
 Windows utilise une application Firebase Web.
@@ -236,7 +299,7 @@ Documentation officielle :
 
 https://firebase.google.com/docs/web/setup
 
-### 9.3 macOS
+### 10.3 macOS
 
 La caisse macOS utilise une application Firebase Apple.
 
@@ -247,7 +310,7 @@ La caisse macOS utilise une application Firebase Apple.
 5. Enregistrer l'application et telecharger `GoogleService-Info.plist`.
 6. Ouvrir ce fichier avec un editeur de texte et copier tout son contenu.
 
-## 10. Renseigner Firebase dans l'application
+## 11. Renseigner Firebase dans l'application
 
 Dans l'application :
 
@@ -264,7 +327,7 @@ Dans l'application :
 La saisie champ par champ reste disponible dans `Options avancees`, mais elle
 n'est normalement pas necessaire.
 
-### 10.1 Verifier la premiere synchronisation
+### 11.1 Verifier la premiere synchronisation
 
 1. Verifier que l'application indique `Donnees envoyees vers Firebase` ou
    `Donnees deja synchronisees`.
@@ -282,7 +345,7 @@ la version locale lorsqu'elle est la plus recente, ou propose de remplacer les
 donnees locales lorsqu'un autre appareil a envoye une version plus recente.
 Les modifications ne sont pas fusionnees ligne par ligne.
 
-## 11. Utiliser un autre appareil
+## 12. Utiliser un autre appareil
 
 1. Installer l'application sur le nouvel appareil.
 2. Utiliser la configuration adaptee a sa plateforme : configuration Android
@@ -298,7 +361,7 @@ l'application le propose.
 Ne pas travailler sur deux appareils en meme temps. Synchroniser avant de
 changer d'appareil, puis synchroniser de nouveau apres les modifications.
 
-### 11.1 Erreurs courantes
+### 12.1 Erreurs courantes
 
 `Configuration non reconnue` : recopier le bloc `firebaseConfig` complet ou le
 contenu complet de `google-services.json`.
@@ -314,7 +377,7 @@ projet Firebase configure dans Tilly, que le chemin contient exactement
 `Aucune donnee` : verifier que le premier appareil a deja synchronise et que
 les deux appareils utilisent le meme compte Firebase.
 
-## 12. Configurer HelloAsso
+## 13. Configurer HelloAsso
 
 HelloAsso permet d'importer les evenements et les participants payants dans
 l'application.
@@ -328,7 +391,7 @@ La configuration HelloAsso demande 4 informations :
 
 Pour une association en utilisation reelle, choisir `Production`.
 
-### 12.1 Trouver l'organization slug
+### 13.1 Trouver l'organization slug
 
 L'`Organization slug` correspond a l'identifiant public de l'association dans
 les URL HelloAsso.
@@ -351,7 +414,7 @@ On peut le retrouver :
 2. en regardant l'URL apres `/associations/` ;
 3. ou dans les liens publics des formulaires et evenements HelloAsso.
 
-### 12.2 Trouver le Client ID et le Client secret
+### 13.2 Trouver le Client ID et le Client secret
 
 1. Se connecter au compte HelloAsso de l'association.
 2. Dans le menu de gauche, ouvrir `Mon compte`.
@@ -369,7 +432,7 @@ Documentation officielle :
 
 https://dev.helloasso.com/docs/obtenir-une-cl%C3%A9-api
 
-### 12.3 Renseigner HelloAsso dans l'application
+### 13.3 Renseigner HelloAsso dans l'application
 
 Dans l'application :
 
@@ -386,14 +449,14 @@ Dans l'application :
 Si la connexion fonctionne, l'application doit pouvoir afficher les evenements
 HelloAsso lors de la creation d'une session.
 
-### 12.4 Utiliser HelloAsso pendant la creation d'une session
+### 13.4 Utiliser HelloAsso pendant la creation d'une session
 
 1. Creer une nouvelle session dans l'application.
 2. Choisir l'evenement HelloAsso a lier.
 3. Importer les participants.
 4. Verifier que les joueurs ou inscrits apparaissent correctement.
 
-### 12.5 Securite du secret HelloAsso
+### 13.5 Securite du secret HelloAsso
 
 Le `Client secret` doit rester confidentiel.
 
@@ -407,7 +470,7 @@ Ne pas le publier :
 Le secret HelloAsso ne doit pas etre synchronise dans Firebase et ne doit pas
 etre inclus dans les exports JSON.
 
-## 13. Limite importante
+## 14. Limite importante
 
 L'application est un outil de suivi de caisse associative.
 

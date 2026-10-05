@@ -16,6 +16,7 @@ import '../../platform/backup_and_links.dart';
 import '../../services/app_update_service.dart';
 import '../../services/firebase_bootstrap.dart';
 import '../../services/firebase_sync_service.dart';
+import '../../services/license/license_service.dart';
 import '../dialogs.dart';
 import '../theme.dart';
 import '../widgets/common_widgets.dart';
@@ -28,7 +29,7 @@ class ArticlesPricePage extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final categories = controller.activeArticleCategories;
+    final categories = controller.allArticleCategories;
     return ListView(
       padding: const EdgeInsets.all(12),
       children: [
@@ -136,6 +137,7 @@ class ArticlesPricePage extends StatelessWidget {
 class ConfigPage extends StatefulWidget {
   const ConfigPage({
     required this.controller,
+    required this.licenseService,
     required this.updateResult,
     required this.checkingUpdate,
     required this.onCheckUpdate,
@@ -144,6 +146,7 @@ class ConfigPage extends StatefulWidget {
   });
 
   final AppController controller;
+  final LicenseService licenseService;
   final AppUpdateResult? updateResult;
   final bool checkingUpdate;
   final VoidCallback onCheckUpdate;
@@ -158,6 +161,7 @@ class _ConfigPageState extends State<ConfigPage>
   late final TabController _tabController;
 
   AppController get controller => widget.controller;
+  LicenseService get licenseService => widget.licenseService;
   AppUpdateResult? get updateResult => widget.updateResult;
   bool get checkingUpdate => widget.checkingUpdate;
   VoidCallback get onCheckUpdate => widget.onCheckUpdate;
@@ -167,7 +171,7 @@ class _ConfigPageState extends State<ConfigPage>
   @override
   void initState() {
     super.initState();
-    _tabController = TabController(length: 7, vsync: this);
+    _tabController = TabController(length: 8, vsync: this);
   }
 
   @override
@@ -225,6 +229,10 @@ class _ConfigPageState extends State<ConfigPage>
                 ),
                 Tab(
                   child: _ConfigTabLabel(
+                      icon: Icons.account_circle, title: 'Compte'),
+                ),
+                Tab(
+                  child: _ConfigTabLabel(
                       icon: Icons.warning_amber, title: 'Remise à zéro'),
                 ),
                 Tab(
@@ -262,6 +270,7 @@ class _ConfigPageState extends State<ConfigPage>
                   _buildRestoreSection(context),
                 ],
               ),
+              _ConfigTabBody(children: _buildAccountSections(context)),
               _ConfigTabBody(children: _buildResetSections(context)),
               _ConfigTabBody(children: _buildAboutSections()),
             ],
@@ -765,6 +774,59 @@ class _ConfigPageState extends State<ConfigPage>
     ];
   }
 
+  List<Widget> _buildAccountSections(BuildContext context) {
+    final email = licenseService.userEmail;
+    final connected = email != null && email.isNotEmpty;
+    return [
+      const SectionTitle('Compte'),
+      ConfigSection(
+        title: 'Compte Tilly',
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            ListTile(
+              leading:
+                  Icon(Icons.account_circle, color: context.primaryAccent),
+              title: Text(
+                  connected ? email : 'Aucun compte connecté'),
+              subtitle: Text(licenseService.getStateMessage()),
+            ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+              child: Align(
+                alignment: Alignment.centerLeft,
+                child: OutlinedButton.icon(
+                  onPressed: connected ? () => _logout(context) : null,
+                  icon: const Icon(Icons.logout),
+                  label: const Text('Se déconnecter'),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+      const SizedBox(height: 12),
+      const TacticalCard(
+        borderColor: AppColors.warn,
+        child: Text(
+          'La déconnexion efface la session sur cet appareil, sans toucher aux '
+          'données de l\'association. Pour retirer cet appareil de votre '
+          'compte, utilisez tilly.orceus.fr.',
+          style: TextStyle(color: AppColors.muted, height: 1.4),
+        ),
+      ),
+    ];
+  }
+
+  Future<void> _logout(BuildContext context) async {
+    final confirmed = await confirm(
+      context,
+      'Se déconnecter de ce compte ? Tu pourras te reconnecter avec un autre compte.',
+    );
+    if (!confirmed || !context.mounted) return;
+    await licenseService.logout();
+  }
+
   List<Widget> _buildAboutSections() {
     return [
       const SectionTitle('À propos'),
@@ -856,16 +918,26 @@ class _ConfigPageState extends State<ConfigPage>
   }
 }
 
-class _ConfigTabBody extends StatelessWidget {
+class _ConfigTabBody extends StatefulWidget {
   const _ConfigTabBody({required this.children});
 
   final List<Widget> children;
 
   @override
+  State<_ConfigTabBody> createState() => _ConfigTabBodyState();
+}
+
+class _ConfigTabBodyState extends State<_ConfigTabBody>
+    with AutomaticKeepAliveClientMixin {
+  @override
+  bool get wantKeepAlive => true;
+
+  @override
   Widget build(BuildContext context) {
+    super.build(context);
     return ListView(
       padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
-      children: children,
+      children: widget.children,
     );
   }
 }

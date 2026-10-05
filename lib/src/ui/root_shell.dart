@@ -7,7 +7,10 @@ import '../controllers/app_controller.dart';
 import '../domain/models.dart';
 import '../platform/backup_and_links.dart';
 import '../services/app_update_service.dart';
+import '../services/license/license_service.dart';
+import 'pages/activation_page.dart';
 import 'pages/bilan_page.dart';
+import 'pages/license_blocked_page.dart';
 import 'pages/cash_analysis_page.dart';
 import 'pages/configuration_page.dart';
 import 'pages/kpi_page.dart';
@@ -16,12 +19,18 @@ import 'pages/players_page.dart';
 import 'pages/sales_page.dart';
 import 'theme.dart';
 import 'widgets/common_widgets.dart';
+import 'widgets/license_banner.dart';
 import 'widgets/tiko_tutorial.dart';
 
 class RootShell extends StatefulWidget {
-  const RootShell({required this.controller, super.key});
+  const RootShell({
+    required this.controller,
+    required this.licenseService,
+    super.key,
+  });
 
   final AppController controller;
+  final LicenseService licenseService;
 
   @override
   State<RootShell> createState() => _RootShellState();
@@ -37,10 +46,12 @@ class _RootShellState extends State<RootShell> {
   bool _tutorialTourQueued = false;
   bool _tutorialTourRunning = false;
   bool _welcomeDialogShown = false;
+  bool _forceActivation = false;
   final Set<String> _queuedTutorialTabs = {};
   String? _tutorialTabAwaitingReentry;
 
   AppController get controller => widget.controller;
+  LicenseService get licenseService => widget.licenseService;
 
   @override
   void initState() {
@@ -63,6 +74,15 @@ class _RootShellState extends State<RootShell> {
       updateResult = result;
       checkingUpdate = false;
     });
+  }
+
+  Future<void> _reconnectLicense() async {
+    final result = await licenseService.validateOnline();
+    if (!mounted) return;
+    final needsLogin = licenseService.authToken == null ||
+        (!licenseService.isLicensed && !licenseService.isReadOnly);
+    if (needsLogin) setState(() => _forceActivation = true);
+    if (result.error != null) snack(context, result.error!);
   }
 
   Future<void> _openUpdate(AppUpdateInfo update) async {
@@ -91,7 +111,7 @@ class _RootShellState extends State<RootShell> {
   @override
   Widget build(BuildContext context) {
     return AnimatedBuilder(
-      animation: controller,
+      animation: Listenable.merge([controller, licenseService]),
       builder: (context, _) {
         final requiredUpdate = updateResult?.update;
         if (requiredUpdate != null) {
@@ -108,7 +128,24 @@ class _RootShellState extends State<RootShell> {
           return const Scaffold(
               body: Center(child: CircularProgressIndicator()));
         }
+        if (licenseService.isBlocked) {
+          return LicenseBlockedPage(
+            key: ValueKey(licenseService.currentState),
+            licenseService: licenseService,
+          );
+        }
+        final readOnly = licenseService.isReadOnly;
+        if (licenseService.isLicensed) _forceActivation = false;
+        if (!licenseService.isLicensed && (!readOnly || _forceActivation)) {
+          return ActivationPage(
+            key: ValueKey(licenseService.currentState),
+            licenseService: licenseService,
+            controller: controller,
+          );
+        }
+        controller.readOnly = readOnly;
         final destinations = _visibleShellDestinations(controller,
+            licenseService: licenseService,
             updateResult: updateResult,
             checkingUpdate: checkingUpdate,
             onCheckUpdate: _checkForUpdate,
@@ -123,90 +160,146 @@ class _RootShellState extends State<RootShell> {
         }
         final selectedDestination = destinations[selectedIndex];
         _queueAutomaticTutorial(destinations, selectedDestination.id);
-        return LayoutBuilder(
-          builder: (context, constraints) {
-            final tablet = constraints.maxWidth >= 900;
-            final body = IndexedStack(
-              index: selectedIndex,
-              children: [
-                for (final destination in destinations) destination.page,
-              ],
-            );
-            return Scaffold(
-              appBar: AppBar(
-                backgroundColor: AppColors.surface,
-                titleSpacing: 12,
-                title: Row(
-                  children: [
-                    _AppTitleIcon(controller: controller),
-                    const SizedBox(width: 8),
-                    Flexible(
-                      child: Text(
-                        controller.associationName,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(
-                            fontWeight: FontWeight.w900, letterSpacing: 1.4),
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    ActionChip(
-                      avatar: const Icon(Icons.flag, size: 16),
-                      label: ConstrainedBox(
-                        constraints: const BoxConstraints(maxWidth: 170),
-                        child: Text(
-                            controller.session.isEmpty
-                                ? 'PARTIE'
-                                : controller.session,
-                            overflow: TextOverflow.ellipsis),
-                      ),
-                      onPressed: () => _editSession(context),
-                    ),
-                  ],
-                ),
-                bottom: const PreferredSize(
-                  preferredSize: Size.fromHeight(2),
-                  child: _PrimaryAccentBar(),
-                ),
-                actions: [
-                  TikoTutorialButton(
-                    onPressed: () => _showPageTutorial(selectedDestination.id),
-                  ),
-                ],
-              ),
-              body: tablet
-                  ? Row(
-                      children: [
-                        NavigationRail(
-                          selectedIndex: selectedIndex,
-                          onDestinationSelected: (index) =>
-                              controller.setTab(destinations[index].tabIndex),
-                          backgroundColor: AppColors.surface,
-                          indicatorColor: context.primaryAccent,
-                          labelType: NavigationRailLabelType.all,
-                          destinations: [
-                            for (final destination in destinations)
-                              NavigationRailDestination(
-                                  icon: Icon(destination.icon),
-                                  label: Text(destination.label)),
-                          ],
-                        ),
-                        const VerticalDivider(
-                            width: 1, color: AppColors.border),
-                        Expanded(child: body),
-                      ],
-                    )
-                  : body,
-              bottomNavigationBar: tablet
-                  ? null
-                  : _CompactBottomNavigation(
-                      destinations: destinations,
-                      selectedIndex: selectedIndex,
-                      onDestinationSelected: controller.setTab,
-                    ),
-            );
-          },
+        return _buildLayout(destinations, selectedIndex, selectedDestination);
+      },
+    );
+  }
+
+  Widget _buildLayout(
+      List<_ShellDestination> destinations,
+      int selectedIndex,
+      _ShellDestination selectedDestination) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final tablet = constraints.maxWidth >= 900;
+        final body = IndexedStack(
+          index: selectedIndex,
+          children: [
+            for (final destination in destinations) destination.page,
+          ],
+        );
+        final readOnly = licenseService.isReadOnly;
+        final pageBody =
+            readOnly ? AbsorbPointer(child: body) : body;
+        final Widget scaffoldBody;
+        if (tablet) {
+          scaffoldBody = _buildTabletBody(
+              destinations, selectedIndex, pageBody, context);
+        } else {
+          scaffoldBody = _buildMobileBody(pageBody, context);
+        }
+        final Widget? bottomNavBar;
+        if (tablet) {
+          bottomNavBar = null;
+        } else {
+          bottomNavBar = _CompactBottomNavigation(
+            destinations: destinations,
+            selectedIndex: selectedIndex,
+            onDestinationSelected: controller.setTab,
+          );
+        }
+        return Scaffold(
+          appBar: _buildAppBar(context, selectedDestination),
+          body: scaffoldBody,
+          bottomNavigationBar: bottomNavBar,
         );
       },
+    );
+  }
+
+  PreferredSizeWidget _buildAppBar(BuildContext context, _ShellDestination selectedDestination) {
+    return AppBar(
+      backgroundColor: AppColors.surface,
+      titleSpacing: 12,
+      title: Row(
+        children: [
+          _AppTitleIcon(controller: controller),
+          const SizedBox(width: 8),
+          Flexible(
+            child: Text(
+              controller.associationName,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(
+                  fontWeight: FontWeight.w900, letterSpacing: 1.4),
+            ),
+          ),
+          const SizedBox(width: 8),
+          ActionChip(
+            avatar: const Icon(Icons.flag, size: 16),
+            label: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 170),
+              child: Text(
+                  controller.session.isEmpty
+                      ? 'PARTIE'
+                      : controller.session,
+                  overflow: TextOverflow.ellipsis),
+            ),
+            onPressed:
+                licenseService.isReadOnly ? null : () => _editSession(context),
+          ),
+        ],
+      ),
+      bottom: const PreferredSize(
+        preferredSize: Size.fromHeight(2),
+        child: _PrimaryAccentBar(),
+      ),
+      actions: [
+        TikoTutorialButton(
+          onPressed: () => _showPageTutorial(selectedDestination.id),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildTabletBody(
+      List<_ShellDestination> destinations,
+      int selectedIndex,
+      Widget body,
+      BuildContext context) {
+    return Column(
+      children: [
+        _buildLicenseBanner(context),
+        Expanded(
+          child: Row(
+            children: [
+              NavigationRail(
+                selectedIndex: selectedIndex,
+                onDestinationSelected: (index) =>
+                    controller.setTab(destinations[index].tabIndex),
+                backgroundColor: AppColors.surface,
+                indicatorColor: context.primaryAccent,
+                labelType: NavigationRailLabelType.all,
+                destinations: [
+                  for (final destination in destinations)
+                    NavigationRailDestination(
+                        icon: Icon(destination.icon),
+                        label: Text(destination.label)),
+                ],
+              ),
+              const VerticalDivider(
+                  width: 1, color: AppColors.border),
+              Expanded(child: body),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildMobileBody(Widget body, BuildContext context) {
+    return Column(
+      children: [
+        _buildLicenseBanner(context),
+        Expanded(child: body),
+      ],
+    );
+  }
+
+  Widget _buildLicenseBanner(BuildContext context) {
+    return LicenseBanner(
+      licenseService: licenseService,
+      onReconnect: _reconnectLicense,
+      onExport: () => copyBackup(context, controller),
     );
   }
 
@@ -536,6 +629,7 @@ class _ShellDestination {
 
 List<_ShellDestination> _visibleShellDestinations(
   AppController controller, {
+  required LicenseService licenseService,
   required AppUpdateResult? updateResult,
   required bool checkingUpdate,
   required VoidCallback onCheckUpdate,
@@ -605,6 +699,7 @@ List<_ShellDestination> _visibleShellDestinations(
       label: 'Config',
       page: ConfigPage(
         controller: controller,
+        licenseService: licenseService,
         updateResult: updateResult,
         checkingUpdate: checkingUpdate,
         onCheckUpdate: onCheckUpdate,
@@ -710,10 +805,10 @@ class UpdateRequiredScaffold extends StatelessWidget {
                     const SizedBox(height: 14),
                     Text(
                       Platform.isAndroid
-                          ? 'Installe le nouvel APK par-dessus l’application existante. Ne la désinstalle pas et n’efface pas ses données : la connexion Firebase, la configuration HelloAsso et la base locale sont alors conservées.'
+                          ? 'Installe le nouvel APK par-dessus l\'application existante. Ne la désinstalle pas et n\'efface pas ses données : la connexion Firebase, la configuration HelloAsso et la base locale sont alors conservées.'
                           : Platform.isMacOS
-                              ? 'Ouvre l’image disque puis remplace Tilly dans Applications. Ne supprime pas les données de l’application : la connexion Firebase, la configuration HelloAsso et la base locale sont alors conservées.'
-                              : 'Exécute l’installateur sur l’installation existante. Ne supprime pas les données de l’application : la connexion Firebase, la configuration HelloAsso et la base locale sont alors conservées.',
+                              ? 'Ouvre l\'image disque puis remplace Tilly dans Applications. Ne supprime pas les données de l\'application : la connexion Firebase, la configuration HelloAsso et la base locale sont alors conservées.'
+                              : 'Exécute l\'installateur sur l\'installation existante. Ne supprime pas les données de l\'application : la connexion Firebase, la configuration HelloAsso et la base locale sont alors conservées.',
                       textAlign: TextAlign.center,
                       style: const TextStyle(color: AppColors.muted),
                     ),
@@ -728,10 +823,10 @@ class UpdateRequiredScaffold extends StatelessWidget {
                           : const Icon(Icons.download),
                       label: Text(
                         Platform.isAndroid
-                            ? 'Sauvegarder puis télécharger l’APK'
+                            ? 'Sauvegarder puis télécharger l\'APK'
                             : Platform.isMacOS
                                 ? 'Sauvegarder puis télécharger le DMG'
-                                : 'Sauvegarder puis télécharger l’installateur',
+                                : 'Sauvegarder puis télécharger l\'installateur',
                       ),
                     ),
                     const SizedBox(height: 8),

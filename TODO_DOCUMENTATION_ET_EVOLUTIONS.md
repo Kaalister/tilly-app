@@ -3,7 +3,7 @@
 Ce fichier liste uniquement ce qu'il reste a relire ou modifier pour vendre
 l'application avec un tuto de mise en place simple : installation + Firebase.
 
-Derniere mise a jour : 2026-09-11 (agents assigned).
+Derniere mise a jour : 2026-10-01 (client de licence v2 termine, docs mises a jour).
 
 ## Agent Assignments
 - **senior-flutter**: CI fixes, ListTile/Material, version alignment
@@ -18,6 +18,39 @@ Derniere mise a jour : 2026-09-11 (agents assigned).
 - **secretary**: Auto-updates this file, AGENTS.md, README, docs
 - **reviewer**: Read-only reviews, blocks push on violations
 - **tech-writer**: MISE_EN_PLACE.md, user guides, non-tech testing
+
+## Client de licence (TERMINE 2026-10-01)
+- [x] Verification de signature Ed25519 reelle (cryptography 2.9)
+- [x] Payload `coveredVersion` + couverture par version pour les licences a vie
+- [x] Etat `VERSION_NOT_COVERED` : lecture seule + bandeau + telechargement de
+      la version couverte
+- [x] Quota d'appareils au niveau du compte (`maxMachines` dans /status)
+- [x] Reactivation reservee au site ; jamais de `/reactivate` ni de retry
+- [x] Deconnexion 100 % locale : aucune revocation depuis l'application
+- [x] Donnees locales cloisonnees par compte Tilly (une base par association)
+- [x] ID machine stable (jamais supprime)
+- [x] Activation au demarrage (validation en ligne a chaque ouverture)
+- [x] Etats UI : active, hors ligne, lecture seule, bloque, appareil desactive
+- [x] Onglet Config > Compte (compte connecte + deconnexion)
+- [x] 84 tests verts, `flutter analyze` sans erreur
+
+## Licence - reste a faire
+- [ ] Miroir de l'ID machine dans la table SQLite `app_settings` (resilience si
+      le stockage securise est perdu).
+- [ ] Extraire la logique d'autorisation dans un fichier dedie
+      (`lib/src/services/license/license_gate.dart`) pour alleger
+      `root_shell.dart` (purement organisationnel).
+- [ ] Ecrire `documentation/LICENCE_SETUP.md` (creation du compte, achat,
+      activation, gestion des appareils, reactivation depuis le site) et le
+      faire tester par une personne non technique.
+- [ ] Verifier la couverture de version en conditions reelles : licence a vie
+      `2.1` + build `2.2.0` -> lecture seule et telechargement propose.
+- [ ] Renseigner la version applicative dans le build (`--dart-define=APP_VERSION`)
+      pour que la couverture de version soit fiable en release.
+- [ ] Test terrain : retrait d'un appareil depuis le site -> blocage a la
+      prochaine ouverture, puis reactivation depuis `/compte`.
+- [ ] Test terrain : abonnement hors ligne au-dela de la fenetre de grace ->
+      bandeau de reconnexion puis deverrouillage automatique.
 
 ## Documentation a relire
 

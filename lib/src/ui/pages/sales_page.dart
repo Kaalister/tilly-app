@@ -745,7 +745,6 @@ class CartPanel extends StatelessWidget {
 
   Widget _buildDonationField() {
     return TextFormField(
-      key: ValueKey(controller.donation),
       initialValue: controller.donation == 0
           ? ''
           : controller.donation.toStringAsFixed(2),

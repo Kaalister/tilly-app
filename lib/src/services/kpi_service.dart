@@ -93,8 +93,7 @@ List<KpiRow> kpiRows(AppController controller, {List<Sale>? sales}) {
   for (final movements in movementsByArticle.values) {
     movements.sort((a, b) => a.createdAt.compareTo(b.createdAt));
   }
-  return controller.activeArticles
-      .where((a) => a.type == 'standard' && a.threshold > 0)
+  return controller.trackedArticles
       .map((a) {
     final s = sold[a.id] ?? (quantity: 0, ca: 0.0);
     final mealQuantity = mealUsed[a.id] ?? 0;

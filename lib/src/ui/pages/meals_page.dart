@@ -274,13 +274,28 @@ class _MealsPageState extends State<MealsPage> {
                   icon: const Icon(Icons.lunch_dining),
                   label: const Text('Préparer'),
                 ),
-              if (meal.status != 'served' && meal.status != 'cancelled')
+              if (meal.status == 'prepared') ...[
                 FilledButton.icon(
                   onPressed: () =>
                       _runMealAction(() => controller.serveMeal(meal)),
                   icon: const Icon(Icons.check),
                   label: const Text('Servir'),
                 ),
+                OutlinedButton.icon(
+                  onPressed: () =>
+                      _runMealAction(() => controller.unprepareMeal(meal)),
+                  icon: const Icon(Icons.undo),
+                  label: const Text('Remettre à préparer'),
+                ),
+              ],
+              if (meal.status == 'served') ...[
+                OutlinedButton.icon(
+                  onPressed: () =>
+                      _runMealAction(() => controller.unserveMeal(meal)),
+                  icon: const Icon(Icons.undo),
+                  label: const Text('Remettre en préparé'),
+                ),
+              ],
               if (meal.status != 'cancelled')
                 OutlinedButton.icon(
                   onPressed: () =>
@@ -455,8 +470,10 @@ class _MealDialogState extends State<_MealDialog> {
 
   void applyFormula(String value) {
     formula = value;
-    if (value == 'Sans snack') snackArticleId = '';
-    if (value == 'Boisson seule') snackArticleId = '';
+    if (value == 'Boisson seule') {
+      snackArticleId = '';
+      drinkArticleId = controller.drinkArticles.firstOrNull?.id ?? '';
+    }
     if (value == 'Standard' && snackArticleId.isEmpty) {
       snackArticleId = controller.snackArticles.firstOrNull?.id ?? '';
     }
@@ -559,7 +576,6 @@ class _MealDialogState extends State<_MealDialog> {
                 children: [
                   for (final value in [
                     'Standard',
-                    'Sans snack',
                     'Boisson seule'
                   ])
                     ChoiceChip(

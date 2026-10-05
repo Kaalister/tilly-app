@@ -12,12 +12,16 @@ import '../utils/iterable_extensions.dart';
 import 'persistable_app_state.dart';
 
 class LocalDatabase {
-  LocalDatabase({String? databasePathOverride})
-      : _databasePathOverride = databasePathOverride;
+  LocalDatabase({
+    String? databasePathOverride,
+    String? databaseDirectoryOverride,
+  })  : _databasePathOverride = databasePathOverride,
+        _databaseDirectoryOverride = databaseDirectoryOverride;
 
   Database? _db;
   String? _userScopeId;
   final String? _databasePathOverride;
+  final String? _databaseDirectoryOverride;
 
   Future<Database> get database async {
     if (_db != null) return _db!;
@@ -42,9 +46,16 @@ class LocalDatabase {
     _userScopeId = nextScope;
   }
 
-  Future<String> _databasePath() async {
+  Future<String> _databasePath() => _pathForScope(_userScopeId);
+
+  Future<String> _pathForScope(String? scopeId) async {
     if (_databasePathOverride != null) return _databasePathOverride;
-    final fileName = databaseFileName(_userScopeId);
+    final fileName = databaseFileName(scopeId);
+    if (_databaseDirectoryOverride != null) {
+      final directory = Directory(_databaseDirectoryOverride);
+      await directory.create(recursive: true);
+      return path.join(directory.path, fileName);
+    }
     if (Platform.isWindows || Platform.isLinux || Platform.isMacOS) {
       final supportDirectory = await getApplicationSupportDirectory();
       final directory = Directory(path.join(supportDirectory.path, 'Tilly'));
@@ -55,6 +66,21 @@ class LocalDatabase {
     final directory = Directory(await getDatabasesPath());
     await directory.create(recursive: true);
     return path.join(directory.path, fileName);
+  }
+
+  // One-time adoption: the first licence account receives the pre-scope local
+  // data so nothing looks lost after the multi-account update. The legacy file
+  // is renamed (never deleted) so a second account cannot adopt it too.
+  Future<void> adoptLegacyDataIfNeeded(String? scopeId) async {
+    if (scopeId == null || scopeId.trim().isEmpty) return;
+    if (_databasePathOverride != null) return;
+    final targetPath = await _pathForScope(scopeId);
+    if (await File(targetPath).exists()) return;
+    final legacyPath = await _pathForScope(null);
+    final legacyFile = File(legacyPath);
+    if (!await legacyFile.exists()) return;
+    await legacyFile.copy(targetPath);
+    await legacyFile.rename('$legacyPath.adopted');
   }
 
   Future<void> close() async {
