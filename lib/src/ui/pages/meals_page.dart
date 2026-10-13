@@ -468,15 +468,15 @@ class _MealDialogState extends State<_MealDialog> {
     super.dispose();
   }
 
-  void applyFormula(String value) {
-    formula = value;
-    if (value == 'Boisson seule') {
-      snackArticleId = '';
-      drinkArticleId = controller.drinkArticles.firstOrNull?.id ?? '';
-    }
-    if (value == 'Standard' && snackArticleId.isEmpty) {
-      snackArticleId = controller.snackArticles.firstOrNull?.id ?? '';
-    }
+  double mealPrice() {
+    final article = controller.articles
+        .where((entry) => entry.id == mealArticleId)
+        .firstOrNull;
+    if (article == null) return 0;
+    final player = controller.players
+        .where((entry) => entry.id == playerId)
+        .firstOrNull;
+    return article.priceFor(player?.isMember ?? false);
   }
 
   String stockPreview(String articleId) {
@@ -515,6 +515,10 @@ class _MealDialogState extends State<_MealDialog> {
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
+              const SizedBox(height: 12),
+              const Text('Participant & paiement',
+                  style: TextStyle(fontWeight: FontWeight.w800)),
+              const SizedBox(height: 6),
               if (meal == null)
                 DropdownButtonFormField<String>(
                   isExpanded: true,
@@ -567,25 +571,17 @@ class _MealDialogState extends State<_MealDialog> {
                   ),
                 ],
               ],
+              if (source == 'onsite') ...[
+                const SizedBox(height: 8),
+                Text('Prix à payer : ${money(mealPrice())}',
+                    style: const TextStyle(
+                        color: AppColors.accent,
+                        fontWeight: FontWeight.w800)),
+              ],
               const SizedBox(height: 12),
-              const Text('Formule rapide',
+              const Text('Repas / Boisson / Snack',
                   style: TextStyle(fontWeight: FontWeight.w800)),
               const SizedBox(height: 6),
-              Wrap(
-                spacing: 7,
-                children: [
-                  for (final value in [
-                    'Standard',
-                    'Boisson seule'
-                  ])
-                    ChoiceChip(
-                      label: Text(value),
-                      selected: formula == value,
-                      onSelected: (_) => setState(() => applyFormula(value)),
-                    ),
-                ],
-              ),
-              const SizedBox(height: 10),
               DropdownButtonFormField<String>(
                 isExpanded: true,
                 key: ValueKey('meal-$mealArticleId'),

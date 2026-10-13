@@ -2590,6 +2590,107 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
+  testWidgets(
+      'meal dialog keeps the participant label visible and drops the quick formula',
+      (tester) async {
+    final controller = _MemoryAppController();
+    controller.players = [testPlayer()];
+    controller.articles = [
+      testArticle(id: 'repas-1', category: 'REPAS', name: 'Repas Standard'),
+      testArticle(id: 'drink-1', name: 'Soda'),
+      testArticle(id: 'snack-1', category: 'SNACKING', name: 'Chips'),
+    ];
+    tester.view.physicalSize = const Size(700, 1300);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: caisseTheme(AppColors.accent),
+        home: Scaffold(body: MealsPage(controller: controller)),
+      ),
+    );
+    await tester.tap(find.widgetWithText(FilledButton, 'Ajouter').first);
+    await tester.pumpAndSettle();
+
+    expect(find.text('Nouveau repas'), findsOneWidget);
+    expect(find.text('Formule rapide'), findsNothing);
+    expect(find.text('Boisson seule'), findsNothing);
+    expect(find.text('Boisson incluse'), findsOneWidget);
+    expect(find.text('Snack inclus'), findsOneWidget);
+    expect(find.text('Participant & paiement'), findsOneWidget);
+    expect(find.text('Repas / Boisson / Snack'), findsOneWidget);
+
+    final viewport = tester.getRect(find.byType(SingleChildScrollView).first);
+    final label = tester.getRect(find.text('Participant'));
+    expect(label.top, greaterThanOrEqualTo(viewport.top));
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('meal dialog shows the onsite price for the selected tariff',
+      (tester) async {
+    final controller = _MemoryAppController();
+    controller.players = [
+      testPlayer(id: 'membre', name: 'Alice Martin', type: 'membre'),
+      testPlayer(
+          id: 'public',
+          name: 'Bruno Public',
+          type: 'public',
+          email: 'bruno@exemple.fr'),
+    ];
+    controller.articles = [
+      testArticle(
+          id: 'repas-1',
+          category: 'REPAS',
+          name: 'Repas Standard',
+          price: 8,
+          memberPrice: 7),
+      testArticle(
+          id: 'repas-2',
+          category: 'REPAS',
+          name: 'Repas Végétarien',
+          price: 9,
+          memberPrice: 6),
+      testArticle(id: 'drink-1', name: 'Soda'),
+      testArticle(id: 'snack-1', category: 'SNACKING', name: 'Chips'),
+    ];
+    tester.view.physicalSize = const Size(700, 1400);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: caisseTheme(AppColors.accent),
+        home: Scaffold(body: MealsPage(controller: controller)),
+      ),
+    );
+    await tester.tap(find.widgetWithText(FilledButton, 'Ajouter').first);
+    await tester.pumpAndSettle();
+
+    expect(find.textContaining('Prix à payer'), findsNothing);
+
+    await tester.tap(find.text('Prépayé HelloAsso'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Achat sur place').last);
+    await tester.pumpAndSettle();
+    expect(find.text('Prix à payer : 7,00 €'), findsOneWidget);
+
+    await tester.tap(find.text('Alice Martin').last);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Bruno Public').last);
+    await tester.pumpAndSettle();
+    expect(find.text('Prix à payer : 8,00 €'), findsOneWidget);
+
+    await tester.tap(find.text('Repas Standard (10)').last);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Repas Végétarien (10)').last);
+    await tester.pumpAndSettle();
+    expect(find.text('Prix à payer : 9,00 €'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('sales grid excludes meal articles', (tester) async {
     final controller = _MemoryAppController();
     controller.players = [testPlayer(name: 'Alice Dupont')];
