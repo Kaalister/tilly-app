@@ -15,8 +15,8 @@ Future<void> copyBackup(BuildContext context, AppController controller) async {
     final content = const JsonEncoder.withIndent('  ').convert(payload);
     final timestamp =
         DateTime.now().toIso8601String().replaceAll(RegExp(r'[:.]'), '-');
-    final fileName = 'tilly-export-$timestamp.json';
-    final savedFile = await _saveJsonBackupFile(fileName, content);
+    final fileName = 'tilly-export-$timestamp.tilly';
+    final savedFile = await _saveBackupFile(fileName, content);
     final name = savedFile['name'] ?? fileName;
     if (context.mounted) {
       snack(context, 'Export enregistré dans Downloads : $name');
@@ -32,20 +32,21 @@ Future<void> copyBackup(BuildContext context, AppController controller) async {
 
 Future<Map<String, String>> saveRecoveryBackup(
     AppController controller, String operation) async {
-  final payload = await controller.fullBackupPayload();
+  final payload =
+      await controller.fullBackupPayload(includeConfiguration: true);
   final content = const JsonEncoder.withIndent('  ').convert(payload);
   final timestamp =
       DateTime.now().toIso8601String().replaceAll(RegExp(r'[:.]'), '-');
-  return _saveJsonBackupFile('tilly-avant-$operation-$timestamp.json', content);
+  return _saveBackupFile('tilly-avant-$operation-$timestamp.tilly', content);
 }
 
 const fileImportChannel = MethodChannel('tilly/file_import');
 
-Future<Map<String, String>> _saveJsonBackupFile(
+Future<Map<String, String>> _saveBackupFile(
     String fileName, String content) async {
   if (Platform.isAndroid) {
     final savedFile = await fileImportChannel.invokeMapMethod<String, String>(
-      'saveJsonBackup',
+      'saveBackup',
       {'name': fileName, 'content': content},
     );
     return savedFile ?? {'name': fileName};
@@ -53,19 +54,43 @@ Future<Map<String, String>> _saveJsonBackupFile(
 
   final downloads = await getDownloadsDirectory();
   final directory = downloads ?? Directory.current;
-  final safeName = _safeJsonFileName(fileName);
+  final safeName = _safeBackupFileName(fileName);
   final file = File(path.join(directory.path, safeName));
   await file.writeAsString(content, encoding: utf8, flush: true);
   return {'name': safeName, 'path': file.path};
 }
 
-String _safeJsonFileName(String name) {
+String _safeBackupFileName(String name) {
   final baseName = name
       .trim()
       .replaceAll(RegExp(r'[^A-Za-z0-9._-]+'), '-')
       .replaceAll(RegExp(r'^[-._]+|[-._]+$'), '');
-  final safe = baseName.isEmpty ? 'tilly-export.json' : baseName;
-  return safe.toLowerCase().endsWith('.json') ? safe : '$safe.json';
+  final safe = baseName.isEmpty ? 'tilly-export.tilly' : baseName;
+  return safe.toLowerCase().endsWith('.tilly') ? safe : '$safe.tilly';
+}
+
+Future<void> installUpdateFile(File file) async {
+  if (!await file.exists()) {
+    throw const FileSystemException('Fichier de mise à jour introuvable');
+  }
+
+  if (Platform.isAndroid) {
+    await fileImportChannel
+        .invokeMethod('installApk', {'path': file.path});
+    return;
+  }
+
+  if (Platform.isMacOS) {
+    await Process.run('open', [file.path]);
+    return;
+  }
+
+  if (Platform.isWindows) {
+    await Process.run('cmd', ['/c', 'start', '', file.path]);
+    return;
+  }
+
+  throw UnsupportedError('Installation non supportée sur cette plateforme');
 }
 
 Future<void> openExternalUrl(String url) async {
@@ -100,28 +125,33 @@ Future<void> openExternalUrl(String url) async {
 Future<void> importBackupFromFile(
     BuildContext context, AppController controller) async {
   try {
-    final file = await _pickJsonBackupFile();
+    final file = await _pickBackupFile();
     if (file == null) return;
 
     final content = _stripUtf8Bom(file['content']);
-    final name = file['name'] ?? 'sauvegarde.json';
+    final name = file['name'] ?? 'sauvegarde.tilly';
     if (content == null || content.trim().isEmpty) {
       throw const FormatException('Fichier vide ou illisible');
     }
 
     final payload = jsonDecode(content);
     if (payload is! Map<String, dynamic>) {
-      throw const FormatException('Format JSON invalide');
+      throw const FormatException('Format de sauvegarde invalide');
     }
     if (!context.mounted) return;
-    final ok = await confirm(context,
-        'Restaurer $name ? Toutes les données locales seront remplacées.');
+    final data = payload['data'];
+    final includesConfiguration = (data is Map && data['appSettings'] is List) ||
+        payload['state'] is Map;
+    final message = includesConfiguration
+        ? 'Restaurer $name ? Toutes les données seront remplacées, y compris la configuration contenue dans cette ancienne sauvegarde.'
+        : 'Restaurer $name ? Toutes les données seront remplacées. La configuration de cet appareil (synchronisation, HelloAsso, personnalisation) restera inchangée.';
+    final ok = await confirm(context, message);
     if (!ok) return;
     final recoveryFile = await saveRecoveryBackup(controller, 'restauration');
     await controller.importBackup(payload);
     if (context.mounted) {
       snack(context,
-          'Sauvegarde restauree. Copie precedente : ${recoveryFile['name']}');
+          'Sauvegarde restaurée. Copie précédente : ${recoveryFile['name']}');
     }
   } on PlatformException catch (error) {
     if (context.mounted) {
@@ -132,27 +162,27 @@ Future<void> importBackupFromFile(
   }
 }
 
-Future<Map<String, String>?> _pickJsonBackupFile() async {
+Future<Map<String, String>?> _pickBackupFile() async {
   if (Platform.isAndroid) {
-    return fileImportChannel.invokeMapMethod<String, String>('pickJsonBackup');
+    return fileImportChannel.invokeMapMethod<String, String>('pickBackup');
   }
 
   if (Platform.isWindows) {
-    return _pickJsonBackupFileWindows();
+    return _pickBackupFileWindows();
   }
 
   if (Platform.isMacOS) {
-    return _pickJsonBackupFileMacOS();
+    return _pickBackupFileMacOS();
   }
 
   throw UnsupportedError(
       'Import de sauvegarde non supporté sur cette plateforme');
 }
 
-Future<Map<String, String>?> _pickJsonBackupFileMacOS() async {
+Future<Map<String, String>?> _pickBackupFileMacOS() async {
   final result = await FilePicker.pickFiles(
     type: FileType.custom,
-    allowedExtensions: const ['json'],
+    allowedExtensions: const ['tilly', 'json'],
     allowMultiple: false,
   );
   final selectedPath = result?.files.single.path;
@@ -163,13 +193,13 @@ Future<Map<String, String>?> _pickJsonBackupFileMacOS() async {
   return {'name': path.basename(file.path), 'content': content};
 }
 
-Future<Map<String, String>?> _pickJsonBackupFileWindows() async {
+Future<Map<String, String>?> _pickBackupFileWindows() async {
   const script = r'''
 Add-Type -AssemblyName System.Windows.Forms
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 $dialog = New-Object System.Windows.Forms.OpenFileDialog
 $dialog.Title = 'Choisir une sauvegarde Tilly'
-$dialog.Filter = 'Sauvegardes JSON (*.json)|*.json|Tous les fichiers (*.*)|*.*'
+$dialog.Filter = 'Sauvegardes Tilly (*.tilly;*.json)|*.tilly;*.json|Tous les fichiers (*.*)|*.*'
 $dialog.Multiselect = $false
 if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
   Write-Output $dialog.FileName

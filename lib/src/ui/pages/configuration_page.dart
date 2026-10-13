@@ -2,7 +2,6 @@ import 'dart:io';
 import 'dart:math';
 
 import 'package:file_picker/file_picker.dart';
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_colorpicker/flutter_colorpicker.dart';
 import 'package:path/path.dart' as path;
@@ -19,6 +18,7 @@ import '../../services/firebase_sync_service.dart';
 import '../../services/license/license_service.dart';
 import '../dialogs.dart';
 import '../theme.dart';
+import '../widgets/app_update_dialog.dart';
 import '../widgets/common_widgets.dart';
 import '../widgets/tiko_tutorial.dart';
 
@@ -141,7 +141,6 @@ class ConfigPage extends StatefulWidget {
     required this.updateResult,
     required this.checkingUpdate,
     required this.onCheckUpdate,
-    required this.onOpenUpdate,
     super.key,
   });
 
@@ -150,7 +149,6 @@ class ConfigPage extends StatefulWidget {
   final AppUpdateResult? updateResult;
   final bool checkingUpdate;
   final VoidCallback onCheckUpdate;
-  final Future<void> Function(AppUpdateInfo update) onOpenUpdate;
 
   @override
   State<ConfigPage> createState() => _ConfigPageState();
@@ -165,8 +163,6 @@ class _ConfigPageState extends State<ConfigPage>
   AppUpdateResult? get updateResult => widget.updateResult;
   bool get checkingUpdate => widget.checkingUpdate;
   VoidCallback get onCheckUpdate => widget.onCheckUpdate;
-  Future<void> Function(AppUpdateInfo update) get onOpenUpdate =>
-      widget.onOpenUpdate;
 
   @override
   void initState() {
@@ -217,7 +213,7 @@ class _ConfigPageState extends State<ConfigPage>
                 ),
                 Tab(
                   child: _ConfigTabLabel(
-                      icon: Icons.cloud_sync, title: 'Firebase'),
+                      icon: Icons.cloud_sync, title: 'Synchronisation'),
                 ),
                 Tab(
                   child: _ConfigTabLabel(
@@ -252,7 +248,7 @@ class _ConfigPageState extends State<ConfigPage>
               _ConfigTabBody(
                 children: [
                   const SectionTitle('Mises à jour'),
-                  _buildUpdateSection(),
+                  _buildUpdateSection(context),
                 ],
               ),
               _ConfigTabBody(children: _buildFirebaseSections(context)),
@@ -491,27 +487,29 @@ class _ConfigPageState extends State<ConfigPage>
     }
   }
 
-  Widget _buildUpdateSection() {
+  Widget _buildUpdateSection(BuildContext context) {
+    final update = updateResult?.update;
     return ConfigActionZone(
-      borderColor: updateResult?.requiresUpdate == true
+      borderColor: update != null
           ? AppColors.warn
-          : AppColors.accent2,
+          : updateResult?.accessDenied == true
+              ? AppColors.danger
+              : AppColors.accent2,
       title: _updateStatusTitle(),
       description: _updateStatusDescription(),
       action: Wrap(
         spacing: 8,
         children: [
-          if (updateResult?.update != null)
+          if (update != null)
             FilledButton.tonalIcon(
-              onPressed: () => onOpenUpdate(updateResult!.update!),
-              icon: const Icon(Icons.download),
-              label: Text(
-                Platform.isAndroid
-                    ? 'Télécharger APK'
-                    : Platform.isMacOS
-                        ? 'Télécharger DMG'
-                        : 'Télécharger',
+              onPressed: () => showAppUpdateDialog(
+                context,
+                update: update,
+                controller: controller,
+                authToken: licenseService.authToken,
               ),
+              icon: const Icon(Icons.system_update),
+              label: const Text('Mettre à jour'),
             ),
           OutlinedButton.icon(
             onPressed: checkingUpdate ? null : onCheckUpdate,
@@ -532,7 +530,7 @@ class _ConfigPageState extends State<ConfigPage>
     final configured = controller.firebaseSettings.isConfigured;
     final connected = controller.firebaseAvailable;
     return [
-      const SectionTitle('Firebase'),
+      const SectionTitle('Synchronisation'),
       ConfigActionZone(
         borderColor: connected
             ? AppColors.accent
@@ -567,7 +565,7 @@ class _ConfigPageState extends State<ConfigPage>
                 icon: const Icon(Icons.cloud_done),
                 label: Text(FirebaseBootstrap.initialized
                     ? 'Se connecter'
-                    : 'Activer Firebase'),
+                    : 'Configurer'),
               ),
             TikoHelpButton(
               tooltip: 'Tiko explique Firebase',
@@ -635,7 +633,7 @@ class _ConfigPageState extends State<ConfigPage>
           : 'Connexion non configurée',
       description: controller.helloAssoSettings.isConfigured
           ? '${controller.helloAssoSettings.organizationSlug} · ${controller.helloAssoSettings.environment == 'sandbox' ? 'Sandbox' : 'Production'}'
-          : 'Renseigne les clés API pour importer les évènements et les participants inscrits.',
+          : 'Renseigne les clés API pour importer les événements et les participants inscrits.',
       action: Wrap(
         spacing: 8,
         runSpacing: 8,
@@ -678,7 +676,7 @@ class _ConfigPageState extends State<ConfigPage>
       borderColor: AppColors.accent2,
       title: 'Exporter mes données',
       description:
-          'Enregistre un JSON complet dans Downloads avec toutes les sessions, participants, ventes, articles et fonds de caisse.',
+          'Enregistre un fichier .tilly dans Downloads avec toutes les sessions, participants, ventes, articles, stocks, repas et fonds de caisse. La configuration (synchronisation, HelloAsso, personnalisation) n\'est pas incluse.',
       action: FilledButton.tonalIcon(
         onPressed: () => copyBackup(context, controller),
         icon: const Icon(Icons.download),
@@ -692,7 +690,7 @@ class _ConfigPageState extends State<ConfigPage>
       borderColor: AppColors.accent2,
       title: 'Restaurer depuis un fichier',
       description:
-          'Importe un JSON valide, apres creation automatique d une copie locale de securite.',
+          'Importe un fichier .tilly après création automatique d\'une copie locale de sécurité. La configuration de cet appareil reste inchangée.',
       action: OutlinedButton.icon(
         onPressed: () => importBackupFromFile(context, controller),
         icon: const Icon(Icons.upload_file),
@@ -741,7 +739,7 @@ class _ConfigPageState extends State<ConfigPage>
         borderColor: AppColors.danger,
         title: 'Supprimer session courante',
         description:
-            'Efface la partie active avec ses ventes, participants présents et comptages. La session la plus récente restante devient active.',
+            'Efface l\'événement actif avec ses ventes, participants présents et comptages. La session la plus récente restante devient active.',
         action: FilledButton(
           style: FilledButton.styleFrom(backgroundColor: AppColors.danger),
           onPressed: () async {
@@ -809,9 +807,8 @@ class _ConfigPageState extends State<ConfigPage>
       const TacticalCard(
         borderColor: AppColors.warn,
         child: Text(
-          'La déconnexion efface la session sur cet appareil, sans toucher aux '
-          'données de l\'association. Pour retirer cet appareil de votre '
-          'compte, utilisez tilly.orceus.fr.',
+          'Pour retirer cet appareil de votre compte, utilisez '
+          'tilly.orceus.fr.',
           style: TextStyle(color: AppColors.muted, height: 1.4),
         ),
       ),
@@ -832,27 +829,27 @@ class _ConfigPageState extends State<ConfigPage>
       const SectionTitle('À propos'),
       ConfigSection(
         title: 'Application',
-        child: const Column(
+        child: Column(
           children: [
             _AboutInfoRow(
               icon: Icons.local_offer_outlined,
               label: 'Version',
               value: appBuildVersion,
             ),
-            Divider(height: 1, color: AppColors.border),
-            _AboutInfoRow(
+            const Divider(height: 1, color: AppColors.border),
+            const _AboutInfoRow(
               icon: Icons.code,
               label: 'Développé par',
               value: 'Kaalister',
             ),
-            Divider(height: 1, color: AppColors.border),
-            _AboutInfoRow(
+            const Divider(height: 1, color: AppColors.border),
+            const _AboutInfoRow(
               icon: Icons.lightbulb_outline,
               label: "À partir de l'idée originale de",
               value: 'Joël Jean',
             ),
-            Divider(height: 1, color: AppColors.border),
-            _AboutInfoRow(
+            const Divider(height: 1, color: AppColors.border),
+            const _AboutInfoRow(
               icon: Icons.verified_user_outlined,
               label: 'Certification',
               value: 'Aucune certification',
@@ -872,10 +869,11 @@ class _ConfigPageState extends State<ConfigPage>
   }
 
   String _updateStatusTitle() {
-    if (!kReleaseMode) return 'Mode développement';
+    if (!updateCheckEnabled) return 'Mode développement';
     if (!AppUpdateService.supportedPlatform) return 'Plateforme non suivie';
     if (checkingUpdate && updateResult == null) return 'Vérification en cours';
     if (updateResult?.requiresUpdate == true) return 'Mise à jour disponible';
+    if (updateResult?.accessDenied == true) return 'Mise à jour non incluse';
     if (updateResult?.error != null) return 'Vérification impossible';
     return 'Application à jour';
   }
@@ -898,23 +896,26 @@ class _ConfigPageState extends State<ConfigPage>
   }
 
   String _updateStatusDescription() {
-    if (!kReleaseMode) {
-      return 'Le contrôle forcé est actif uniquement dans les builds release. Version build : $appBuildVersion.';
+    if (!updateCheckEnabled) {
+      return 'Le contrôle de mise à jour est actif en release ou avec DEV_UPDATE_CHECK=true. Version build : $appBuildVersion.';
     }
     if (!AppUpdateService.supportedPlatform) {
-      return 'Le contrôle GitHub est prévu pour Android, Windows et macOS.';
+      return 'Le contrôle est prévu pour Android, Windows et macOS.';
     }
     final update = updateResult?.update;
     if (update != null) {
-      return 'Version $appBuildVersion installée, version ${update.latestVersion} publiée sur GitHub. Fichier : ${update.assetName}. Une copie locale est créée avant le téléchargement.';
+      final size = update.formattedSize;
+      return 'Version $appBuildVersion installée, version ${update.latestVersion} disponible'
+          '${size.isEmpty ? '' : ' ($size)'}. Téléchargement dans l\'application, '
+          'copie de sécurité automatique.';
     }
     if (updateResult?.error != null) {
-      return '${updateResult!.error} Version build : $appBuildVersion.';
+      return '${updateResult!.error} Version installée : $appBuildVersion.';
     }
     final latest = updateResult?.latestVersion;
     return latest == null
-        ? 'Version build : $appBuildVersion.'
-        : 'Version build : $appBuildVersion. Dernière version GitHub : $latest.';
+        ? 'Version installée : $appBuildVersion.'
+        : 'Version installée : $appBuildVersion. Version accessible : $latest.';
   }
 }
 
@@ -1218,7 +1219,7 @@ class HistoryPage extends StatelessWidget {
       padding: const EdgeInsets.all(12),
       children: [
         SectionTitle(
-          'Historique des parties',
+          'Historique des événements',
           trailing: FilledButton.icon(
             onPressed: () => showCreateSessionDialog(context, controller),
             icon: const Icon(Icons.add),
@@ -1305,7 +1306,7 @@ class HistoryPage extends StatelessWidget {
                           leading:
                               const Icon(Icons.link, color: AppColors.accent2),
                           title: Text(session.helloassoEventName.isEmpty
-                              ? 'Évènement HelloAsso'
+                              ? 'Événement HelloAsso'
                               : session.helloassoEventName),
                           subtitle: Text(session.helloassoEventUrl,
                               maxLines: 1, overflow: TextOverflow.ellipsis),
@@ -1573,8 +1574,6 @@ class ConfigActionZone extends StatelessWidget {
         final compact = constraints.maxWidth < 620;
         final descriptionText = Text(
           description,
-          maxLines: 3,
-          overflow: TextOverflow.ellipsis,
           style: const TextStyle(
               color: AppColors.muted, fontSize: 13, height: 1.35),
         );

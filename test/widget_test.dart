@@ -8,9 +8,11 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:path/path.dart' as path;
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
+import 'package:crypto/crypto.dart' as crypto;
 import 'package:cryptography/cryptography.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:http/http.dart' as http;
+import 'package:package_info_plus/package_info_plus.dart';
 import 'package:http/testing.dart';
 import 'package:tilly/src/config/app_config.dart';
 import 'package:tilly/src/services/license/license_api.dart';
@@ -41,6 +43,14 @@ class _MemoryAppController extends AppController {
   @override
   Future<void> setPrimaryColor(Color value) async {
     appSettings = appSettings.copyWith(primaryColorValue: value.toARGB32());
+    notifyListeners();
+  }
+
+  @override
+  Future<void> setMainTabVisible(String id, bool visible) async {
+    final visibility = <String, bool>{...appSettings.mainTabVisibility};
+    visibility[id] = visible;
+    appSettings = appSettings.copyWith(mainTabVisibility: visibility);
     notifyListeners();
   }
 
@@ -113,6 +123,24 @@ class _MemoryAppController extends AppController {
     }
     notifyListeners();
   }
+}
+
+class _MemoryTutorialStore extends TutorialStore {
+  bool? welcome;
+  Set<String>? pages;
+
+  @override
+  Future<bool?> loadWelcomeSeen() async => welcome;
+
+  @override
+  Future<void> saveWelcomeSeen() async => welcome = true;
+
+  @override
+  Future<Set<String>?> loadPagesSeen() async => pages;
+
+  @override
+  Future<void> savePagesSeen(Set<String> pageIds) async =>
+      pages = {...pageIds};
 }
 
 class _FailingDatabase extends LocalDatabase {
@@ -800,6 +828,53 @@ void main() {
     expect(playerIdColumn['notnull'], 0);
   });
 
+  test('legacy default session names migrate to evenement', () async {
+    final tempDirectory =
+        await Directory.systemTemp.createTemp('tilly-rename-test-');
+    final databasePath = path.join(tempDirectory.path, 'tilly-v8.db');
+    final legacyDatabase = await openDatabase(
+      databasePath,
+      version: 8,
+      onCreate: (database, version) async {
+        await database.execute('''
+          CREATE TABLE sessions (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            event_date TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'open',
+            notes TEXT,
+            helloasso_form_slug TEXT,
+            helloasso_form_type TEXT,
+            helloasso_event_name TEXT,
+            helloasso_event_url TEXT,
+            helloasso_event_id TEXT,
+            helloasso_synced_at TEXT,
+            created_at TEXT NOT NULL,
+            closed_at TEXT
+          )
+        ''');
+      },
+    );
+    await legacyDatabase.insert('sessions', {
+      'id': 'session-1',
+      'name': 'Nouvelle partie',
+      'event_date': '2026-07-18T00:00:00',
+      'status': 'open',
+      'created_at': '2026-07-18T00:00:00',
+    });
+    await legacyDatabase.close();
+
+    final database = LocalDatabase(databasePathOverride: databasePath);
+    addTearDown(() async {
+      await database.close();
+      await tempDirectory.delete(recursive: true);
+    });
+
+    final sessions = await database.loadSessions();
+
+    expect(sessions.single.name, 'Nouvel événement');
+  });
+
   test('HelloAsso portable settings exclude the client secret', () {
     const settings = HelloAssoSettings(
       organizationSlug: 'tilly',
@@ -843,24 +918,44 @@ void main() {
     expect(restored.primaryColor.toARGB32(), 0xFFFF6B35);
   });
 
-  test('Tiko tutorial progress persists locally', () async {
-    final tempDirectory = await Directory.systemTemp.createTemp('tilly-test-');
-    final databasePath = path.join(tempDirectory.path, 'tilly.db');
-    final writer = LocalDatabase(databasePathOverride: databasePath);
-
-    await writer.saveTutorialWelcomeSeen();
-    await writer.saveTutorialPagesSeen({AppTabIds.sales, AppTabIds.players});
-    await writer.close();
-
-    final reader = LocalDatabase(databasePathOverride: databasePath);
+  test('Tiko tutorial progress persists across account datasets', () async {
+    final store = _MemoryTutorialStore();
+    final firstDirectory =
+        await Directory.systemTemp.createTemp('tilly-tutorial-first-');
+    final firstDatabase =
+        LocalDatabase(databaseDirectoryOverride: firstDirectory.path);
+    final first = AppController(
+      database: firstDatabase,
+      secureSettings: _MemorySecureStorage(),
+      tutorialStore: store,
+    );
     addTearDown(() async {
-      await reader.close();
-      await tempDirectory.delete(recursive: true);
+      await firstDatabase.close();
+      await firstDirectory.delete(recursive: true);
     });
 
-    expect(await reader.loadTutorialWelcomeSeen(), isTrue);
-    expect(await reader.loadTutorialPagesSeen(),
-        {AppTabIds.sales, AppTabIds.players});
+    await first.load();
+    await first.markTutorialWelcomeSeen();
+    await first.markTutorialPageSeen(AppTabIds.sales);
+
+    final secondDirectory =
+        await Directory.systemTemp.createTemp('tilly-tutorial-second-');
+    final secondDatabase =
+        LocalDatabase(databaseDirectoryOverride: secondDirectory.path);
+    final second = AppController(
+      database: secondDatabase,
+      secureSettings: _MemorySecureStorage(),
+      tutorialStore: store,
+    );
+    addTearDown(() async {
+      await secondDatabase.close();
+      await secondDirectory.delete(recursive: true);
+    });
+
+    await second.load();
+
+    expect(second.tutorialWelcomeSeen, isTrue);
+    expect(second.tutorialPagesSeen, contains(AppTabIds.sales));
   });
 
   test('Firebase settings round-trip and build runtime options', () {
@@ -960,15 +1055,13 @@ void main() {
     expect(options.iosBundleId, 'com.tilly.caisse');
   });
 
-  test('license API URL comes from the bundled env files', () async {
+  test('license API URL comes from the compiled default and .env.dev',
+      () async {
     expect(dotenv.isInitialized, isFalse);
     expect(licenseApiBaseUrl, 'http://localhost:3000');
 
     await dotenv.load(fileName: '.env.dev');
     expect(licenseApiBaseUrl, 'http://localhost:3000');
-
-    await dotenv.load(fileName: '.env');
-    expect(licenseApiBaseUrl, 'https://tilly.orceus.fr');
 
     dotenv.clean();
   });
@@ -1285,6 +1378,56 @@ void main() {
     expect(state, LicenseState.clockTampered);
   });
 
+  test('tutorial override maps debug flag values', () {
+    expect(tutorialOverrideFor('on'), 'on');
+    expect(tutorialOverrideFor('true'), 'on');
+    expect(tutorialOverrideFor('off'), 'off');
+    expect(tutorialOverrideFor('false'), 'off');
+    expect(tutorialOverrideFor(''), '');
+    expect(tutorialOverrideFor('nonsense'), '');
+  });
+
+  test('demo dataset provides three days of activity', () {
+    final dataset = buildDemoDataset(now: DateTime(2026, 7, 18, 12));
+
+    expect(dataset.days, hasLength(3));
+    expect(dataset.players, hasLength(10));
+    expect(dataset.articles, isNotEmpty);
+    expect(dataset.categories, contains('BOISSONS'));
+
+    for (final day in dataset.days) {
+      expect(day.sales, isNotEmpty);
+      expect(day.players, isNotEmpty);
+      expect(day.cashStart, isNotEmpty);
+      expect(day.cashEnd, isNotEmpty);
+      expect(day.stockMovements, isNotEmpty);
+    }
+
+    expect(dataset.days.first.session.eventDate, DateTime(2026, 7, 16));
+    expect(dataset.days.last.session.eventDate, DateTime(2026, 7, 18));
+    expect(dataset.days.first.session.status, 'closed');
+    expect(dataset.days.last.session.status, 'open');
+
+    final sales = dataset.days.expand((day) => day.sales).toList();
+    expect(sales.any((sale) => sale.status == 'cancelled'), isTrue);
+    expect(sales.any((sale) => sale.donation > 0), isTrue);
+    expect(sales.any((sale) => sale.tariff == 'membre'), isTrue);
+    expect(sales.any((sale) => sale.tariff == 'public'), isTrue);
+  });
+
+  test('dev license override maps build values to license states', () {
+    expect(licenseStateForDevOverride('valid'), LicenseState.licenseValid);
+    expect(
+        licenseStateForDevOverride('grace'), LicenseState.offlineGracePeriod);
+    expect(licenseStateForDevOverride('server'),
+        LicenseState.serverValidationRequired);
+    expect(licenseStateForDevOverride('blocked'), LicenseState.machineRevoked);
+    expect(licenseStateForDevOverride('expired'), LicenseState.licenseExpired);
+    expect(licenseStateForDevOverride('none'), LicenseState.noLicense);
+    expect(licenseStateForDevOverride(''), isNull);
+    expect(licenseStateForDevOverride('nonsense'), isNull);
+  });
+
   test('missing license reports no license', () async {
     final service = LicenseService(
       secureStorage: _MemorySecureStorage(),
@@ -1337,6 +1480,188 @@ void main() {
     final result = await service.validateOnline();
     expect(result.state, LicenseState.licenseValid);
     expect(service.isLicensed, isTrue);
+  });
+
+  test('unexpected validation error keeps the local state', () async {
+    const machineId = 'MCH-8f14e45f-ceea-467a-9a3c-1b2d3e4f5a6b';
+    final storage = _MemorySecureStorage()
+      ..values['tilly_license_machine_id'] = machineId
+      ..values['tilly_license_auth_token'] = 'token-1';
+    final store = LicenseStore(storage);
+    final secret = await store.getOrCreateDeviceSecret();
+    await store.saveEnvelope(await _licenseEnvelope(machineId: machineId));
+    await store.saveState(await store.signState(
+      lastValidatedAt: DateTime.now(),
+      lastServerTime: DateTime.now(),
+      machineId: machineId,
+      deviceSecret: secret,
+    ));
+
+    final api = LicenseApiClient(
+      client: MockClient((request) async {
+        if (request.url.path.endsWith('/license/validate')) {
+          return http.Response('<html>404</html>', 404);
+        }
+        return http.Response('{}', 404);
+      }),
+    );
+
+    final service = LicenseService(
+      secureStorage: storage,
+      apiClient: api,
+      verifier: _testVerifier(),
+    );
+    addTearDown(service.dispose);
+    await service.initialize();
+    await Future<void>.delayed(const Duration(milliseconds: 50));
+
+    expect(service.currentState, LicenseState.licenseValid);
+    expect(service.isLicensed, isTrue);
+
+    final result = await service.validateOnline();
+    expect(result.state, LicenseState.licenseValid);
+    expect(service.isLicensed, isTrue);
+  });
+
+  test('explicit license rejection still updates the state', () async {
+    const machineId = 'MCH-8f14e45f-ceea-467a-9a3c-1b2d3e4f5a6b';
+    final storage = _MemorySecureStorage()
+      ..values['tilly_license_machine_id'] = machineId
+      ..values['tilly_license_auth_token'] = 'token-1';
+    final store = LicenseStore(storage);
+    final secret = await store.getOrCreateDeviceSecret();
+    await store.saveEnvelope(await _licenseEnvelope(machineId: machineId));
+    await store.saveState(await store.signState(
+      lastValidatedAt: DateTime.now(),
+      lastServerTime: DateTime.now(),
+      machineId: machineId,
+      deviceSecret: secret,
+    ));
+
+    final api = LicenseApiClient(
+      client: MockClient((request) async {
+        if (request.url.path.endsWith('/license/validate')) {
+          return http.Response(
+            '{"type":"license_not_found","status":404,"state":"NOT_FOUND"}',
+            404,
+            headers: {'content-type': 'application/json'},
+          );
+        }
+        return http.Response('{}', 404);
+      }),
+    );
+
+    final service = LicenseService(
+      secureStorage: storage,
+      apiClient: api,
+      verifier: _testVerifier(),
+    );
+    addTearDown(service.dispose);
+    await service.initialize();
+    await Future<void>.delayed(const Duration(milliseconds: 50));
+
+    final result = await service.validateOnline();
+    expect(result.state, LicenseState.noSubscription);
+    expect(service.isLicensed, isFalse);
+  });
+
+  test('update check returns the release accessible to the account', () async {
+    late http.Request captured;
+    final client = MockClient((request) async {
+      captured = request;
+      return http.Response(
+        jsonEncode({
+          'data': {
+            'version': 'v9.9.9',
+            'publishedAt': '2026-10-01T12:00:00.000Z',
+            'fileName': 'Tilly-macOS-9.9.9.dmg',
+            'size': 2048,
+            'sha256': 'ABCDEF',
+            'downloadUrl': '/download/macos?version=9.9.9',
+          }
+        }),
+        200,
+        headers: {'content-type': 'application/json'},
+      );
+    });
+
+    final result =
+        await AppUpdateService.check(authToken: 'token-1', client: client);
+
+    expect(result.update, isNotNull);
+    expect(result.update!.latestVersion, '9.9.9');
+    expect(result.update!.sha256, 'abcdef');
+    expect(result.update!.formattedSize, '2 Ko');
+    expect(result.update!.downloadUrl,
+        '$licenseApiBaseUrl/download/macos?version=9.9.9');
+    expect(captured.url.queryParameters['platform'],
+        AppUpdateService.platformSlug);
+    expect(captured.headers['Authorization'], 'Bearer token-1');
+  }, skip: !AppUpdateService.supportedPlatform);
+
+  test('update check detects an up-to-date version', () async {
+    final client = MockClient((request) async => http.Response(
+          jsonEncode({
+            'data': {
+              'version': appBuildVersion,
+              'fileName': 'Tilly-macOS-$appBuildVersion.dmg',
+              'downloadUrl': '/download/macos',
+            }
+          }),
+          200,
+          headers: {'content-type': 'application/json'},
+        ));
+
+    final result =
+        await AppUpdateService.check(authToken: 'token-1', client: client);
+
+    expect(result.update, isNull);
+    expect(result.latestVersion, appBuildVersion);
+  }, skip: !AppUpdateService.supportedPlatform);
+
+  test('update check reports an account without download rights', () async {
+    final client = MockClient((request) async => http.Response(
+          '{"type":"download_forbidden","status":403,'
+          '"detail":"Votre licence à vie couvre Tilly jusqu\'à la version 1.1."}',
+          403,
+          headers: {'content-type': 'application/json'},
+        ));
+
+    final result =
+        await AppUpdateService.check(authToken: 'token-1', client: client);
+
+    expect(result.update, isNull);
+    expect(result.accessDenied, isTrue);
+    expect(result.error, contains('1.1'));
+  }, skip: !AppUpdateService.supportedPlatform);
+
+  test('app version resolves from the binary without a compiled define',
+      () async {
+    final previous = appBuildVersion;
+    addTearDown(() => appBuildVersion = previous);
+    PackageInfo.setMockInitialValues(
+      appName: 'Tilly',
+      packageName: 'com.tilly.caisse',
+      version: '2.3.4',
+      buildNumber: '2003004',
+      buildSignature: '',
+    );
+
+    await initializeAppVersion();
+
+    expect(appBuildVersion, '2.3.4');
+  });
+
+  test('cached update file hash is verified', () async {
+    final directory =
+        await Directory.systemTemp.createTemp('tilly-update-hash-');
+    addTearDown(() => directory.delete(recursive: true));
+    final file = File(path.join(directory.path, 'update.apk'))
+      ..writeAsBytesSync([1, 2, 3]);
+    final digest = crypto.sha256.convert([1, 2, 3]).toString();
+
+    expect(await AppUpdateDownloader.matchesSha256(file, digest), isTrue);
+    expect(await AppUpdateDownloader.matchesSha256(file, 'deadbeef'), isFalse);
   });
 
   test('read-only mode keeps the data exportable', () async {
@@ -1554,6 +1879,99 @@ void main() {
     expect(() => validateBackupPayload(payload), throwsFormatException);
   });
 
+  test('.tilly backups validate without configuration', () {
+    final payload = _validModernBackup()..['version'] = backupFormatVersion;
+    payload['data'] =
+        Map<String, Object?>.from(payload['data'] as Map)..remove('appSettings');
+    expect(() => validateBackupPayload(payload), returnsNormally);
+
+    final broken = _validModernBackup()..['version'] = backupFormatVersion;
+    broken['data'] = Map<String, Object?>.from(broken['data'] as Map)
+      ..remove('appSettings')
+      ..['activeSessionId'] = 'missing-session';
+    expect(() => validateBackupPayload(broken), throwsFormatException);
+  });
+
+  test('.tilly export keeps the data and leaves the configuration out',
+      () async {
+    final tempDirectory = await Directory.systemTemp.createTemp('tilly-export-');
+    final database =
+        LocalDatabase(databaseDirectoryOverride: tempDirectory.path);
+    final controller = AppController(
+      database: database,
+      secureSettings: _MemorySecureStorage(),
+    );
+    addTearDown(() async {
+      await database.close();
+      await tempDirectory.delete(recursive: true);
+    });
+
+    await controller.load();
+    await controller.addPlayer(
+      firstName: 'Alice',
+      lastName: 'Martin',
+      email: '',
+      type: 'public',
+    );
+    await controller.setAssociationName('Asso Export');
+
+    final payload = await controller.fullBackupPayload();
+    final data = Map<String, dynamic>.from(payload['data'] as Map);
+
+    expect(payload['format'], tillyBackupFormat);
+    expect(payload['version'], backupFormatVersion);
+    expect(payload['configurationIncluded'], isFalse);
+    expect(data.containsKey('appSettings'), isFalse);
+    expect(data['activeSessionId'], controller.activeSession?.id);
+    expect(jsonEncode(data['players']), contains('Alice'));
+  });
+
+  test('.tilly restore replaces the data but preserves the configuration',
+      () async {
+    final sourceDirectory =
+        await Directory.systemTemp.createTemp('tilly-restore-source-');
+    final targetDirectory =
+        await Directory.systemTemp.createTemp('tilly-restore-target-');
+    final sourceDatabase =
+        LocalDatabase(databaseDirectoryOverride: sourceDirectory.path);
+    final targetDatabase =
+        LocalDatabase(databaseDirectoryOverride: targetDirectory.path);
+    addTearDown(() async {
+      await sourceDatabase.close();
+      await targetDatabase.close();
+      await sourceDirectory.delete(recursive: true);
+      await targetDirectory.delete(recursive: true);
+    });
+
+    final source = AppController(
+      database: sourceDatabase,
+      secureSettings: _MemorySecureStorage(),
+    );
+    await source.load();
+    await source.addPlayer(
+      firstName: 'Alice',
+      lastName: 'Martin',
+      email: '',
+      type: 'public',
+    );
+    await source.setAssociationName('Asso Source');
+    final sourceSessionId = source.activeSession!.id;
+    final payload = await source.fullBackupPayload();
+
+    final target = AppController(
+      database: targetDatabase,
+      secureSettings: _MemorySecureStorage(),
+    );
+    await target.load();
+    await target.setAssociationName('Asso Cible');
+
+    await target.importBackup(payload);
+
+    expect(target.associationName, 'Asso Cible');
+    expect(target.activeSession?.id, sourceSessionId);
+    expect(jsonEncode(target.allPlayers), contains('Alice'));
+  });
+
   testWidgets('association rename dialog updates without framework exception',
       (tester) async {
     final controller = _MemoryAppController();
@@ -1567,7 +1985,6 @@ void main() {
             updateResult: null,
             checkingUpdate: false,
             onCheckUpdate: () {},
-            onOpenUpdate: (_) async {},
           ),
         ),
       ),
@@ -1598,7 +2015,6 @@ void main() {
             updateResult: null,
             checkingUpdate: false,
             onCheckUpdate: () {},
-            onOpenUpdate: (_) async {},
           ),
         ),
       ),
@@ -1616,6 +2032,61 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(controller.primaryColor.toARGB32(), AppColors.accent2.toARGB32());
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('config scroll position survives a main tab toggle',
+      (tester) async {
+    final controller = _MemoryAppController()
+      ..tutorialWelcomeSeen = true
+      ..tutorialPagesSeen = {
+        ...AppTabIds.configurable,
+        AppTabIds.sales,
+        AppTabIds.config,
+      };
+    tester.view.physicalSize = const Size(1200, 700);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: caisseTheme(AppColors.accent),
+        home: RootShell(
+          controller: controller,
+          licenseService: _MockLicenseService(),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.descendant(
+      of: find.byType(NavigationRail),
+      matching: find.text('Config'),
+    ));
+    await tester.pumpAndSettle();
+
+    final listView = find
+        .descendant(
+            of: find.byType(ConfigPage), matching: find.byType(ListView))
+        .first;
+    await tester.drag(listView, const Offset(0, -200));
+    await tester.pumpAndSettle();
+
+    double scrollOffset() => tester
+        .state<ScrollableState>(
+            find.descendant(of: listView, matching: find.byType(Scrollable)))
+        .position
+        .pixels;
+
+    final offsetBefore = scrollOffset();
+    expect(offsetBefore, greaterThan(0));
+
+    await tester.tap(find.widgetWithText(SwitchListTile, 'Stats'));
+    await tester.pumpAndSettle();
+
+    expect(controller.isMainTabVisible(AppTabIds.stats), isFalse);
+    expect(scrollOffset(), offsetBefore);
     expect(tester.takeException(), isNull);
   });
 
@@ -1637,20 +2108,19 @@ void main() {
             updateResult: null,
             checkingUpdate: false,
             onCheckUpdate: () {},
-            onOpenUpdate: (_) async {},
           ),
         ),
       ),
     );
 
-    await tester.tap(find.text('Firebase'));
+    await tester.tap(find.text('Synchronisation'));
     await tester.pumpAndSettle();
 
     expect(find.text('À quoi ça sert ?'), findsOneWidget);
     await tester.tap(find.byTooltip('Tiko explique Firebase'));
     await tester.pumpAndSettle();
 
-    expect(find.textContaining('synchronisation est entièrement manuelle'),
+    expect(find.textContaining('synchronisation est optionnelle'),
         findsOneWidget);
 
     for (var step = 0; step < 4; step++) {
@@ -1658,7 +2128,8 @@ void main() {
       await tester.pumpAndSettle();
     }
 
-    expect(find.textContaining('organizations/default/users'), findsOneWidget);
+    expect(find.textContaining('un autre appareil a des données plus récentes'),
+        findsOneWidget);
 
     await tester.tap(find.text('Suivant'));
     await tester.pumpAndSettle();
@@ -1676,6 +2147,48 @@ void main() {
 
     expect(find.textContaining('HelloAsso est facultatif'), findsOneWidget);
     expect(tester.takeException(), isNull);
+  });
+
+  test('legacy tutorial rows are removed from the account database',
+      () async {
+    final tempDirectory =
+        await Directory.systemTemp.createTemp('tilly-tutorial-cleanup-');
+    final databasePath = path.join(tempDirectory.path, 'tilly-v9.db');
+    final legacy = await openDatabase(
+      databasePath,
+      version: 9,
+      onCreate: (database, version) async {
+        await database.execute('''
+          CREATE TABLE app_settings (
+            key TEXT PRIMARY KEY,
+            value TEXT,
+            updated_at TEXT
+          )
+        ''');
+      },
+    );
+    final now = DateTime.now().toIso8601String();
+    await legacy.insert('app_settings', {
+      'key': 'tutorial_welcome_seen',
+      'value': 'true',
+      'updated_at': now,
+    });
+    await legacy.insert('app_settings', {
+      'key': 'tutorial_pages_seen',
+      'value': jsonEncode(['sales']),
+      'updated_at': now,
+    });
+    await legacy.close();
+
+    final database = LocalDatabase(databasePathOverride: databasePath);
+    addTearDown(() async {
+      await database.close();
+      await tempDirectory.delete(recursive: true);
+    });
+
+    final rows = await (await database.database).query('app_settings');
+
+    expect(rows, isEmpty);
   });
 
   testWidgets('Tiko first launch tour ends on articles page', (tester) async {
@@ -2194,7 +2707,6 @@ testWidgets('player dialog adds participant without email', (tester) async {
             updateResult: null,
             checkingUpdate: false,
             onCheckUpdate: () {},
-            onOpenUpdate: (_) async {},
           ),
         ),
       ),
@@ -2667,6 +3179,56 @@ testWidgets('player dialog adds participant without email', (tester) async {
     expect(find.text('Se connecter'), findsNothing);
     expect(find.textContaining('Mode hors ligne'), findsNothing);
     expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('validation hiccup does not show the login page', (tester) async {
+    const machineId = 'MCH-8f14e45f-ceea-467a-9a3c-1b2d3e4f5a6b';
+    final storage = _MemorySecureStorage()
+      ..values['tilly_license_machine_id'] = machineId
+      ..values['tilly_license_auth_token'] = 'token-1';
+    final store = LicenseStore(storage);
+    final secret = await store.getOrCreateDeviceSecret();
+    await store.saveEnvelope(await _licenseEnvelope(machineId: machineId));
+    await store.saveState(await store.signState(
+      lastValidatedAt: DateTime.now(),
+      lastServerTime: DateTime.now(),
+      machineId: machineId,
+      deviceSecret: secret,
+    ));
+
+    final api = LicenseApiClient(
+      client: MockClient((request) async {
+        if (request.url.path.endsWith('/license/validate')) {
+          return http.Response('<html>404</html>', 404);
+        }
+        return http.Response('{}', 404);
+      }),
+    );
+
+    final license = LicenseService(
+      secureStorage: storage,
+      apiClient: api,
+      verifier: _testVerifier(),
+    );
+    await license.initialize();
+
+    final controller = _MemoryAppController()
+      ..tutorialWelcomeSeen = true
+      ..tutorialPagesSeen = {...AppTabIds.configurable, AppTabIds.sales};
+
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: caisseTheme(AppColors.accent),
+        home: RootShell(controller: controller, licenseService: license),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.byType(ActivationPage), findsNothing);
+    expect(license.isLicensed, isTrue);
+    expect(tester.takeException(), isNull);
+
+    license.dispose();
   });
 
   testWidgets('version banner appears when the version is not covered',

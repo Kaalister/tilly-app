@@ -2,29 +2,34 @@ import 'dart:math';
 
 import 'package:flutter/material.dart';
 
+import '../config/app_config.dart';
 import '../data/local_database.dart';
 import '../data/persistable_app_state.dart';
 import '../domain/models.dart';
 import '../services/firebase_bootstrap.dart';
 import '../services/firebase_monitoring_service.dart';
+import '../services/demo_data_service.dart';
 import '../services/firebase_sync_service.dart';
 import '../services/hello_asso_import_service.dart';
 import '../services/meal_service.dart';
 import '../services/secure_settings_service.dart';
 import '../services/stock_service.dart';
-import '../ui/theme.dart';
+import '../services/tutorial_store.dart';
 import '../utils/iterable_extensions.dart';
 
 class AppController extends ChangeNotifier implements PersistableAppState {
   AppController({
     LocalDatabase? database,
     SecureSettingsService? secureSettings,
+    TutorialStore? tutorialStore,
   })  : _database = database ?? LocalDatabase(),
-        _secureSettings = secureSettings ?? SecureSettingsService();
+        _secureSettings = secureSettings ?? SecureSettingsService(),
+        _tutorialStore = tutorialStore ?? TutorialStore();
 
   final LocalDatabase _database;
   final FirebaseSyncService _syncService = FirebaseSyncService();
   final SecureSettingsService _secureSettings;
+  final TutorialStore _tutorialStore;
   final HelloAssoImportService _helloAssoImport = HelloAssoImportService();
   final MealService _mealService = MealService();
   final StockService _stockService = StockService();
@@ -151,6 +156,9 @@ List<String> get allArticleCategories => articleCategories;
       await _database.adoptLegacyDataIfNeeded(_dataScope);
       await _database.setUserScope(_dataScope);
       await _loadLocalState();
+      if (await _seedDemoDataIfNeeded()) {
+        await _loadLocalState();
+      }
       FirebaseMonitoringService.setContextKey('current_tab', _tabId(tab));
       FirebaseMonitoringService.logAction('app_loaded', context: {
         'tab': _tabId(tab),
@@ -170,7 +178,7 @@ List<String> get allArticleCategories => articleCategories;
     sessions = await _database.loadSessions();
     var activeSessionId = await _database.loadActiveSessionId();
     if (sessions.isEmpty) {
-      final created = await _database.createSession('Nouvelle partie');
+      final created = await _database.createSession('Nouvel événement');
       sessions = [created];
       activeSessionId = created.id;
     }
@@ -182,8 +190,7 @@ List<String> get allArticleCategories => articleCategories;
     }
     final storedHelloAssoSettings = await _database.loadHelloAssoSettings();
     appSettings = await _database.loadAppSettings();
-    tutorialWelcomeSeen = await _database.loadTutorialWelcomeSeen();
-    tutorialPagesSeen = await _database.loadTutorialPagesSeen();
+    await _loadTutorialState();
     helloAssoSettings = await _secureSettings
         .loadHelloAssoSettings(storedHelloAssoSettings, scope: _dataScope);
     if (storedHelloAssoSettings.clientSecret.trim().isNotEmpty) {
@@ -215,6 +222,44 @@ List<String> get allArticleCategories => articleCategories;
     }
   }
 
+  Future<bool> _seedDemoDataIfNeeded() async {
+    if (!demoDataEnabled) return false;
+    if (!await _database.hasOnlyBootstrapData()) {
+      if (await _database.hasBusinessActivity()) return false;
+      await _database.resetBusinessData();
+    }
+    final dataset = buildDemoDataset();
+    articles = dataset.articles;
+    _setArticleCategories(dataset.categories);
+    allPlayers = dataset.players;
+    for (final day in dataset.days) {
+      activeSession = day.session;
+      players = day.players;
+      sales = day.sales;
+      cashStart = day.cashStart;
+      cashEnd = day.cashEnd;
+      pendingStockMovements.addAll(day.stockMovements);
+      await persist(markUpdated: false);
+    }
+    return true;
+  }
+
+  Future<void> _loadTutorialState() async {
+    final override = devTutorialOverride;
+    if (override == 'off') {
+      tutorialWelcomeSeen = true;
+      tutorialPagesSeen = AppTabIds.all.toSet();
+      return;
+    }
+    if (override == 'on') {
+      tutorialWelcomeSeen = false;
+      tutorialPagesSeen = {};
+      return;
+    }
+    tutorialWelcomeSeen = await _tutorialStore.loadWelcomeSeen() ?? false;
+    tutorialPagesSeen = await _tutorialStore.loadPagesSeen() ?? const {};
+  }
+
   Future<void> persist({bool markUpdated = true}) async {
     await _database.saveAll(this, markUpdated: markUpdated);
     _cacheActiveSessionSales();
@@ -227,14 +272,14 @@ List<String> get allArticleCategories => articleCategories;
     if (tutorialWelcomeSeen) return;
     tutorialWelcomeSeen = true;
     notifyListeners();
-    await _database.saveTutorialWelcomeSeen();
+    await _tutorialStore.saveWelcomeSeen();
   }
 
   Future<void> markTutorialPageSeen(String pageId) async {
     if (tutorialPagesSeen.contains(pageId)) return;
     tutorialPagesSeen = {...tutorialPagesSeen, pageId};
     notifyListeners();
-    await _database.saveTutorialPagesSeen(tutorialPagesSeen);
+    await _tutorialStore.savePagesSeen(tutorialPagesSeen);
   }
 
   Future<FirebaseSyncResult> syncNow({
@@ -435,7 +480,7 @@ List<String> get allArticleCategories => articleCategories;
     }
     final importedSession = SessionRecord(
       id: makeId('session'),
-      name: '${state['session'] ?? 'Partie importée'}',
+      name: '${state['session'] ?? 'Événement importé'}',
       eventDate: DateTime.now(),
     );
     activeSession = importedSession;
@@ -585,7 +630,7 @@ List<String> get allArticleCategories => articleCategories;
   Future<void> setSession(String value) async {
     final current = activeSession;
     if (current == null) return;
-    current.name = value.trim().isEmpty ? 'Partie' : value.trim();
+    current.name = value.trim().isEmpty ? 'Événement' : value.trim();
     sessions = sessions.map((s) => s.id == current.id ? current : s).toList();
     notifyListeners();
     await persist();
@@ -639,7 +684,7 @@ List<String> get allArticleCategories => articleCategories;
             helloAssoSettings, helloassoEvent);
     final syncedAt = helloassoEvent == null ? null : DateTime.now();
     final created = await _database.createSession(
-      name.trim().isEmpty ? (helloassoEvent?.name ?? 'Nouvelle partie') : name,
+      name.trim().isEmpty ? (helloassoEvent?.name ?? 'Nouvel événement') : name,
       helloassoEvent: helloassoEvent,
       helloassoSyncedAt: syncedAt,
     );
@@ -701,7 +746,7 @@ List<String> get allArticleCategories => articleCategories;
     salesBySession.remove(sessionId);
     sessions = await _database.loadSessions();
     if (sessions.isEmpty) {
-      final created = await _database.createSession('Nouvelle partie');
+      final created = await _database.createSession('Nouvel événement');
       sessions = [created];
       activeSession = created;
     } else {
@@ -1290,7 +1335,7 @@ List<String> get allArticleCategories => articleCategories;
   Future<void> resetAll() async {
     final created = SessionRecord(
       id: makeId('session'),
-      name: 'Nouvelle partie',
+      name: 'Nouvel événement',
       eventDate: DateTime.now(),
     );
     await _database.resetBusinessData();
@@ -1369,44 +1414,13 @@ List<String> get allArticleCategories => articleCategories;
     notifyListeners();
   }
 
-  Map<String, dynamic> backupPayload() => {
-        'version': 3,
-        'exportedAt': DateTime.now().toIso8601String(),
-        'identity': VisualIdentity.name,
-        'state': {
-          'activeSession': activeSession?.toJson(),
-          'appSettings': appSettings.toJson(),
-          'sessions': sessions.map((e) => e.toJson()).toList(),
-          'players': allPlayers.map((e) => e.toJson()).toList(),
-          'activeSessionPlayers': players.map((e) => e.toJson()).toList(),
-          'articleCategories': articleCategories,
-          'articles': articles.map((e) => e.toJson()).toList(),
-          'sales': sales.map((e) => e.toJson()).toList(),
-          'meals': meals
-              .map((meal) => {
-                    'id': meal.id,
-                    'playerId': meal.playerId,
-                    'playerName': meal.playerName,
-                    'source': meal.source,
-                    'status': meal.status,
-                    'formula': meal.formula,
-                    'mealArticleId': meal.mealArticleId,
-                    'drinkArticleId': meal.drinkArticleId,
-                    'snackArticleId': meal.snackArticleId,
-                    'options': meal.options,
-                    'note': meal.note,
-                  })
-              .toList(),
-          'cashStart': cashStart,
-          'cashEnd': cashEnd,
-        },
-      };
-
-  Future<Map<String, dynamic>> fullBackupPayload() async {
+  Future<Map<String, dynamic>> fullBackupPayload(
+      {bool includeConfiguration = false}) async {
     FirebaseMonitoringService.logAction('backup_export_started',
         context: {'tab': _tabId(tab)});
     await persist(markUpdated: false);
-    final payload = await _database.exportAll();
+    final payload = await _database.exportAll(
+        includeConfiguration: includeConfiguration);
     FirebaseMonitoringService.logAction('backup_export_finished');
     return payload;
   }

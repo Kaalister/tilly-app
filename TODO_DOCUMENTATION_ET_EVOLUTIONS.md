@@ -130,7 +130,7 @@ organizations/default/users/{userId}/snapshots/caisse-main
 - [ ] Adapter le stockage local pour le web.
 - [ ] Verifier la compatibilite Firebase sur web.
 - [ ] Verifier les limites iOS pour l'usage hors ligne et la persistance locale.
-- [ ] Adapter les exports PDF et JSON pour le navigateur.
+- [ ] Adapter les exports PDF et les sauvegardes `.tilly` pour le navigateur.
 - [ ] Ajouter une section dans le tuto de mise en place pour l'installation iOS
       lorsque la version web sera disponible.
 - [ ] Tester sur iPhone et iPad reels.
@@ -198,7 +198,7 @@ organizations/default/users/{userId}/snapshots/caisse-main
 - [ ] Faire un test complet avec un nouveau projet Firebase.
 - [ ] Installer l'app sur un deuxieme appareil et recuperer les donnees via
       Firebase.
-- [ ] Faire une sauvegarde JSON avant et apres le test.
+- [ ] Faire une sauvegarde `.tilly` avant et apres le test.
 - [ ] Verifier que la mention "outil non certifie" est visible.
 
 ## Mettre en place un suivit

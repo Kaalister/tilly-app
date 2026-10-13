@@ -52,3 +52,6 @@ documentation/*
 !documentation/Base/
 documentation/Base/*
 !documentation/Base/caisse_airsoft.html
+
+# Configuration locale (jamais versionnée)
+.env

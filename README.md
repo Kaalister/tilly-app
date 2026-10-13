@@ -1,7 +1,7 @@
 # Tilly
 
 Application de caisse Flutter pour les journees airsoft de Tilly. Elle
-permet de gerer une partie depuis un telephone Android, un poste Windows ou
+permet de gerer un evenement depuis un telephone Android, un poste Windows ou
 un Mac : inscriptions, ventes, stock, paiements, controle de la caisse et
 rapports de fin de journee.
 
@@ -11,7 +11,7 @@ synchronisation entre appareils et l'import d'inscrits a un evenement.
 
 ## Fonctionnalites
 
-- Gestion de sessions/parties et historique des ventes.
+- Gestion de sessions/evenements et historique des ventes.
 - Liste des joueurs, distinction public/adherent et tarifs adaptes.
 - Caisse rapide avec panier, dons et paiements especes, PayPal ou SumUp.
 - Onglet repas : preparation a l'avance, suivi a servir/prepare/servi,
@@ -23,8 +23,8 @@ synchronisation entre appareils et l'import d'inscrits a un evenement.
 - Tableau KPI : chiffre d'affaires, produits vendus, alertes stock et
   suggestions de reapprovisionnement.
 - Exports PDF : bilan de session, joueurs, analyse de caisse et KPI.
-- Export/restauration d'une sauvegarde JSON complete dans le dossier
-  `Downloads`.
+- Export/restauration d'une sauvegarde `.tilly` complete (donnees de
+  l'application, hors configuration) dans le dossier `Downloads`.
 - Synchronisation manuelle Firebase Auth/Cloud Firestore lorsque configuree.
 - Import optionnel d'evenements et de joueurs payants depuis HelloAsso.
 - Suivi developpeur Android optionnel avec Firebase Analytics et Crashlytics.
@@ -92,7 +92,7 @@ desinstaller et sans effacer ses donnees :
   stockees hors du dossier d'installation.
 - macOS : ouvrir le nouveau DMG et remplacer `Tilly.app` dans Applications.
   Les donnees restent dans le dossier Application Support de l'utilisateur.
-- Depuis l'ecran de mise a jour de l'application, une sauvegarde JSON de
+- Depuis l'ecran de mise a jour de l'application, une sauvegarde `.tilly` de
   recuperation est automatiquement creee dans `Downloads` avant l'ouverture
   du fichier a telecharger.
 
@@ -135,8 +135,8 @@ lancement via clic droit sur l'application, puis **Ouvrir**.
 3. Configurer les articles et le stock dans l'ecran de configuration des
    tarifs.
 4. Saisir les fonds de caisse debut/fin et consulter l'analyse especes.
-5. Exporter les bilans PDF et une sauvegarde JSON avant archivage ou transfert
-   vers un autre appareil.
+5. Exporter les bilans PDF et une sauvegarde `.tilly` avant archivage ou
+   transfert vers un autre appareil.
 
 ### Licence et activation
 
@@ -205,7 +205,7 @@ Dans **Config > HelloAsso**, renseigner le slug de l'association, un client ID,
 un secret API et l'environnement (production ou sandbox). Lors de la creation
 d'une session, l'application peut alors lier un evenement HelloAsso et importer
 les payeurs inscrits. Le secret est conserve dans le stockage securise de
-l'appareil et est exclu des exports JSON et de Firebase.
+l'appareil et est exclu des sauvegardes `.tilly` et de Firebase.
 
 ## Donnees Locales
 
@@ -213,7 +213,7 @@ La base SQLite contient notamment :
 
 | Donnee | Usage |
 | --- | --- |
-| Sessions | Parties, dates et lien evenement HelloAsso |
+| Sessions | Evenements, dates et lien HelloAsso |
 | Joueurs | Public/adherent et presence par session |
 | Articles et categories | Prix, prix adherent, stock et seuils |
 | Ventes et lignes de vente | Panier valide, moyen de paiement et snapshots |
@@ -226,6 +226,11 @@ Les locations restent facturables mais ne consomment jamais de stock. Une
 consommation interne peut etre enregistree dans **Articles & prix > Sortie
 asso** ; elle diminue le stock et alimente les statistiques sans generer de
 paiement ni de chiffre d'affaires.
+
+La sauvegarde `.tilly` contient toutes les donnees metier (sessions, joueurs,
+articles, ventes, repas, stock et comptages) ainsi que la session active. La
+configuration de l'appareil (Firebase, HelloAsso, nom, image, couleur et
+onglets) n'est pas incluse et reste inchangee lors d'une restauration.
 
 En mode developpement, la base et le snapshot Firebase utilisent un suffixe
 `_dev` afin de ne pas ecraser les donnees de production.
@@ -302,20 +307,17 @@ Authentication par email/mot de passe et Cloud Firestore comme expliqué dans
 
 ### Configuration de l'API de licence
 
-L'URL de base de l'API de licence est lue depuis un fichier `.env` embarque
-avec l'application :
+L'URL de base de l'API de licence est resolue dans cet ordre :
 
-| Fichier | Build | Valeur par defaut |
-| --- | --- | --- |
-| `.env.dev` | debug (`flutter run`) | `http://localhost:3000` |
-| `.env` | profile et release | `https://tilly.orceus.fr` |
+1. `--dart-define=LICENSE_API_URL=...` au moment du build (recommande pour
+   tester une API locale dans un build release) ;
+2. le fichier `.env.dev`, embarque pour les builds debug uniquement ;
+3. les valeurs compilees dans `lib/src/config/app_config.dart`
+   (`http://localhost:3000` en debug, `https://tilly.orceus.fr` en release).
 
-Pour tester la production depuis un build debug, modifier `.env.dev`. A
-l'inverse, ne jamais placer l'URL locale dans `.env` : ce fichier est embarque
-dans les builds de release, donc dans les APK, ZIP et DMG distribues.
-
-Si le fichier est absent ou illisible, l'application retombe sur les valeurs
-compilees dans `lib/src/config/app_config.dart`.
+Le fichier `.env` de production n'est plus versionne (ignore par git) : les
+builds release utilisent l'URL de production compilee. Ne jamais distribuer un
+build contenant une URL locale.
 
 #### Backend local selon la plateforme
 
@@ -323,11 +325,14 @@ compilees dans `lib/src/config/app_config.dart`.
 - Emulateur Android : `localhost` designe l'emulateur, pas le Mac. En debug,
   l'application remplace automatiquement `localhost` et `127.0.0.1` par
   `10.0.2.2` (adresse de la machine hote vue par l'emulateur). Le trafic HTTP
-  en clair est autorise uniquement dans le manifest debug.
-- Appareil Android physique : renseigner l'adresse locale du poste de
-  developpement dans `.env.dev`, par exemple
-  `LICENSE_API_URL=http://192.168.1.128:3000`, puis reconstruire l'application.
-  Le telephone et le poste doivent etre sur le meme reseau.
+  en clair est autorise uniquement dans le manifest debug. En release local,
+  passer explicitement
+  `--dart-define=LICENSE_API_URL=http://10.0.2.2:3000` (aucune reecriture en
+  release).
+- Appareil Android physique : passer l'adresse locale du poste de
+  developpement, par exemple
+  `--dart-define=LICENSE_API_URL=http://192.168.1.128:3000`. Le telephone et le
+  poste doivent etre sur le meme reseau.
 
 Une modification de `.env.dev` necessite un redemarrage complet de
 l'application (`flutter run`), pas un simple hot reload.

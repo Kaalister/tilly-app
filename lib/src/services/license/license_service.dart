@@ -14,6 +14,32 @@ import '../../config/app_config.dart';
 
 const _validationInterval = Duration(hours: 6);
 
+LicenseState? licenseStateForDevOverride(String value) {
+  switch (value.trim().toLowerCase()) {
+    case 'valid':
+    case 'licensed':
+    case 'true':
+      return LicenseState.licenseValid;
+    case 'grace':
+    case 'offline':
+      return LicenseState.offlineGracePeriod;
+    case 'server':
+    case 'revalidation':
+    case 'readonly':
+      return LicenseState.serverValidationRequired;
+    case 'blocked':
+    case 'revoked':
+      return LicenseState.machineRevoked;
+    case 'expired':
+      return LicenseState.licenseExpired;
+    case 'none':
+    case 'unlicensed':
+    case 'false':
+      return LicenseState.noLicense;
+  }
+  return null;
+}
+
 class LicenseService extends ChangeNotifier {
   LicenseService({
     required SecureSettingsService secureStorage,
@@ -71,6 +97,14 @@ class LicenseService extends ChangeNotifier {
       _currentState == LicenseState.invalidMachine;
 
   Future<void> initialize() async {
+    final override = _devLicenseOverrideState();
+    if (override != null) {
+      await _loadPersistedAuth();
+      await _checkLicenseOffline();
+      _currentState = override;
+      notifyListeners();
+      return;
+    }
     await _loadPersistedAuth();
     await _checkLicenseOffline();
     _startBackgroundValidation();
@@ -265,7 +299,14 @@ class LicenseService extends ChangeNotifier {
     }
   }
 
+  LicenseState? _devLicenseOverrideState() =>
+      licenseStateForDevOverride(devLicenseOverride);
+
   Future<({LicenseState state, String? error})> validateOnline() async {
+    final override = _devLicenseOverrideState();
+    if (override != null) {
+      return (state: override, error: null);
+    }
     if (isBlocked) {
       // Terminal state: no retry, no network call.
       return (state: _currentState, error: null);
@@ -294,8 +335,7 @@ class LicenseService extends ChangeNotifier {
         // Never a reactivation: a revoked device is refused upstream.
         return await _activateWithToken();
       }
-      if (_isTransientState(e.state)) {
-        // Keep the local state: a network hiccup must not lock the app out.
+      if (!_isLicenseVerdictState(e.state)) {
         return (state: _currentState, error: e.message);
       }
       _currentState = _mapApiErrorToState(e.state);
@@ -306,11 +346,21 @@ class LicenseService extends ChangeNotifier {
     }
   }
 
-  bool _isTransientState(String state) {
-    return state == 'network_error' ||
-        state == 'server_error' ||
-        state == 'unexpected' ||
-        state == 'rate_limit_exceeded';
+  bool _isLicenseVerdictState(String state) {
+    switch (state) {
+      case 'NOT_FOUND':
+      case 'LICENSE_REVOKED':
+      case 'LICENSE_SUSPENDED':
+      case 'LICENSE_EXPIRED':
+      case 'MACHINE_REVOKED':
+      case 'MACHINE_LIMIT_REACHED':
+      case 'MACHINE_NOT_ACTIVATED':
+      case 'VERSION_NOT_COVERED':
+      case 'unauthorized':
+        return true;
+      default:
+        return false;
+    }
   }
 
   // Local logout only. The app never revokes a machine: deactivation is done

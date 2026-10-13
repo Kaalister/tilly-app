@@ -5,24 +5,37 @@ import 'dart:math';
 import 'package:http/http.dart' as http;
 
 import '../config/app_config.dart';
-import '../utils/iterable_extensions.dart';
 
 class AppUpdateInfo {
   const AppUpdateInfo({
     required this.latestVersion,
     required this.currentVersion,
     required this.downloadUrl,
-    required this.releaseUrl,
-    required this.assetName,
-    required this.publishedAt,
+    required this.fileName,
+    this.size,
+    this.sha256,
+    this.publishedAt,
   });
 
   final String latestVersion;
   final String currentVersion;
   final String downloadUrl;
-  final String releaseUrl;
-  final String assetName;
+  final String fileName;
+  final int? size;
+  final String? sha256;
   final DateTime? publishedAt;
+
+  String get formattedSize {
+    final bytes = size;
+    if (bytes == null || bytes <= 0) return '';
+    if (bytes >= 1024 * 1024 * 1024) {
+      return '${(bytes / (1024 * 1024 * 1024)).toStringAsFixed(1)} Go';
+    }
+    if (bytes >= 1024 * 1024) {
+      return '${(bytes / (1024 * 1024)).toStringAsFixed(1)} Mo';
+    }
+    return '${(bytes / 1024).toStringAsFixed(0)} Ko';
+  }
 }
 
 class AppUpdateResult {
@@ -30,109 +43,138 @@ class AppUpdateResult {
     this.update,
     this.latestVersion,
     this.error,
+    this.accessDenied = false,
   });
 
   final AppUpdateInfo? update;
   final String? latestVersion;
   final String? error;
+  final bool accessDenied;
 
   bool get requiresUpdate => update != null;
 }
 
 class AppUpdateService {
   static const _requestTimeout = Duration(seconds: 15);
+  static const _nativeClientHeader = 'X-Tilly-Client';
 
   static bool get supportedPlatform =>
       Platform.isAndroid || Platform.isWindows || Platform.isMacOS;
 
-  static Future<AppUpdateResult> check() async {
-    if (!supportedPlatform) {
-      return const AppUpdateResult(latestVersion: appBuildVersion);
-    }
+  static String get platformSlug {
+    if (Platform.isAndroid) return 'android';
+    if (Platform.isWindows) return 'windows';
+    if (Platform.isMacOS) return 'macos';
+    return '';
+  }
 
+  static Future<AppUpdateResult> check({
+    String? authToken,
+    http.Client? client,
+  }) async {
+    if (!supportedPlatform) {
+      return AppUpdateResult(latestVersion: appBuildVersion);
+    }
+    final httpClient = client ?? http.Client();
     try {
-      final response = await http.get(
-        Uri.parse(latestReleaseApi),
-        headers: const {
-          'Accept': 'application/vnd.github+json',
-          'User-Agent': 'TillyUpdateChecker',
+      final uri = Uri.parse(
+          '$licenseApiBaseUrl$releasesLatestPath?platform=$platformSlug');
+      final response = await httpClient.get(
+        uri,
+        headers: {
+          'Accept': 'application/json',
+          _nativeClientHeader: 'native',
+          if (authToken != null && authToken.isNotEmpty)
+            'Authorization': 'Bearer $authToken',
         },
       ).timeout(_requestTimeout);
-      if (response.statusCode != 200) {
+
+      if (response.statusCode == 204) {
+        return AppUpdateResult(latestVersion: appBuildVersion);
+      }
+      if (response.statusCode == 200) {
+        return _parseRelease(response.body);
+      }
+      if (response.statusCode == 401) {
+        return const AppUpdateResult(error: 'Session expirée. Reconnecte-toi.');
+      }
+      if (response.statusCode == 403) {
         return AppUpdateResult(
-            error:
-                'GitHub a répondu ${response.statusCode}. Vérification impossible.');
+          error: _serverMessage(response) ??
+              'Ton compte ne donne pas accès à la mise à jour.',
+          accessDenied: true,
+        );
       }
-
-      final payload = jsonDecode(response.body);
-      if (payload is! Map<String, dynamic>) {
+      if (response.statusCode == 404) {
         return const AppUpdateResult(
-            error: 'Réponse GitHub invalide. Vérification impossible.');
+            error: 'Aucune version publiée pour cette plateforme.');
       }
-
-      final tag = '${payload['tag_name'] ?? ''}'.trim();
-      final latestVersion = _cleanVersion(tag);
-      if (latestVersion.isEmpty) {
+      if (response.statusCode == 429) {
         return const AppUpdateResult(
-            error: 'La dernière Release GitHub ne contient pas de tag valide.');
+            error: 'Trop de vérifications. Réessaie dans quelques minutes.');
       }
-
-      if (_compareVersions(latestVersion, appBuildVersion) <= 0) {
-        return AppUpdateResult(latestVersion: latestVersion);
-      }
-
-      final asset = _platformAsset(payload['assets']);
-      final releaseUrl =
-          '${payload['html_url'] ?? 'https://github.com/$githubOwner/$githubRepo/releases/latest'}';
-      final downloadUrl =
-          '${asset?['browser_download_url'] ?? releaseUrl}'.trim();
-      final assetName = '${asset?['name'] ?? 'GitHub Release'}'.trim();
-      final publishedAt = DateTime.tryParse('${payload['published_at'] ?? ''}');
-
       return AppUpdateResult(
-        latestVersion: latestVersion,
-        update: AppUpdateInfo(
-          latestVersion: latestVersion,
-          currentVersion: appBuildVersion,
-          downloadUrl: downloadUrl,
-          releaseUrl: releaseUrl,
-          assetName: assetName.isEmpty ? 'GitHub Release' : assetName,
-          publishedAt: publishedAt,
-        ),
-      );
+          error: 'Vérification impossible (serveur ${response.statusCode}).');
+    } on http.ClientException {
+      return const AppUpdateResult(
+          error: 'Impossible de joindre le serveur de mise à jour.');
+    } on SocketException {
+      return const AppUpdateResult(
+          error: 'Impossible de joindre le serveur de mise à jour.');
+    } on FormatException {
+      return const AppUpdateResult(error: 'Réponse de mise à jour invalide.');
     } catch (error) {
       return AppUpdateResult(error: 'Vérification impossible : $error');
+    } finally {
+      if (client == null) httpClient.close();
     }
   }
 
-  static Map<String, dynamic>? _platformAsset(dynamic assets) {
-    if (assets is! List) return null;
-    final typedAssets =
-        assets.whereType<Map>().map((asset) => asset.cast<String, dynamic>());
-    bool matches(Map<String, dynamic> asset, String extension) {
-      final name = '${asset['name'] ?? ''}'.toLowerCase();
-      return name.endsWith(extension);
+  static AppUpdateResult _parseRelease(String body) {
+    final decoded = jsonDecode(body);
+    final data = decoded is Map ? decoded['data'] : null;
+    if (data is! Map) {
+      return const AppUpdateResult(
+          error: 'Aucune version publiée pour cette plateforme.');
     }
+    final release = Map<String, dynamic>.from(data);
+    final version = _cleanVersion('${release['version'] ?? ''}');
+    if (version.isEmpty) {
+      return const AppUpdateResult(error: 'Réponse de mise à jour invalide.');
+    }
+    if (_compareVersions(version, appBuildVersion) <= 0) {
+      return AppUpdateResult(latestVersion: version);
+    }
+    final downloadPath = '${release['downloadUrl'] ?? ''}'.trim();
+    final fileName = '${release['fileName'] ?? ''}'.trim();
+    if (downloadPath.isEmpty || fileName.isEmpty) {
+      return const AppUpdateResult(
+          error: 'Fichier de mise à jour introuvable.');
+    }
+    final base = Uri.parse(licenseApiBaseUrl);
+    final sha256 = '${release['sha256'] ?? ''}'.trim();
+    return AppUpdateResult(
+      latestVersion: version,
+      update: AppUpdateInfo(
+        latestVersion: version,
+        currentVersion: appBuildVersion,
+        downloadUrl: base.resolve(downloadPath).toString(),
+        fileName: fileName,
+        size: (release['size'] as num?)?.round(),
+        sha256: sha256.isEmpty ? null : sha256.toLowerCase(),
+        publishedAt: DateTime.tryParse('${release['publishedAt'] ?? ''}'),
+      ),
+    );
+  }
 
-    if (Platform.isAndroid) {
-      return typedAssets.where((asset) => matches(asset, '.apk')).firstOrNull;
-    }
-    if (Platform.isWindows) {
-      return typedAssets.where((asset) {
-            final name = '${asset['name'] ?? ''}'.toLowerCase();
-            return name.endsWith('.exe') && name.contains('setup');
-          }).firstOrNull ??
-          typedAssets.where((asset) => matches(asset, '.exe')).firstOrNull ??
-          typedAssets.where((asset) => matches(asset, '.zip')).firstOrNull;
-    }
-    if (Platform.isMacOS) {
-      return typedAssets.where((asset) => matches(asset, '.dmg')).firstOrNull ??
-          typedAssets.where((asset) {
-            final name = '${asset['name'] ?? ''}'.toLowerCase();
-            return name.endsWith('.zip') &&
-                (name.contains('macos') || name.contains('mac-'));
-          }).firstOrNull;
-    }
+  static String? _serverMessage(http.Response response) {
+    try {
+      final decoded = jsonDecode(response.body);
+      if (decoded is Map) {
+        final detail = '${decoded['detail'] ?? decoded['title'] ?? ''}'.trim();
+        if (detail.isNotEmpty) return detail;
+      }
+    } catch (_) {}
     return null;
   }
 }

@@ -50,6 +50,7 @@ jobs:
       - name: Build Windows app
         run: >
           flutter build windows --release
+          --build-name "${{ steps.version.outputs.app_version }}"
           --dart-define=APP_VERSION=${{ steps.version.outputs.app_version }}
 
       - name: Create portable zip

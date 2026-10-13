@@ -29,7 +29,7 @@ class PlayersPage extends StatelessWidget {
       padding: const EdgeInsets.all(12),
       children: [
         SectionTitle(
-          'Participants de la partie (${players.length})',
+          'Participants de l\'événement (${players.length})',
           trailing: IconButton.filledTonal(
             onPressed: () => showPlayerDialog(context, controller),
             icon: const Icon(Icons.person_add),
@@ -74,7 +74,8 @@ class PlayersPage extends StatelessWidget {
             child: Center(
               child: Padding(
                 padding: EdgeInsets.all(24),
-                child: Text('Aucune vente enregistrée pour cette partie'),
+                child:
+                    Text('Aucune vente enregistrée pour cet événement'),
               ),
             ),
           )

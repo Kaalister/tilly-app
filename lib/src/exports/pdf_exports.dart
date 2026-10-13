@@ -854,7 +854,7 @@ Future<Uint8List> _buildCashPdf(AppController controller) async {
 }
 
 pw.Widget _pdfCashHeader(DateTime date, AppController controller) {
-  final session = controller.session.isEmpty ? 'Partie' : controller.session;
+  final session = controller.session.isEmpty ? 'Événement' : controller.session;
   return pw.Column(
     children: [
       pw.Center(
@@ -1210,7 +1210,7 @@ Future<Uint8List> _buildKpiPdf(
         _pdfSectionHeader('4. REPARTITION CA PAR CATEGORIE'),
         _pdfPieChart(categoryCa, totalCA),
         pw.SizedBox(height: 32),
-        _pdfSectionHeader('5. EVOLUTION CA PAR PARTIE'),
+        _pdfSectionHeader('5. EVOLUTION CA PAR EVENEMENT'),
         _pdfSessionLineChart(sessionCa),
       ],
     ),
@@ -1220,7 +1220,7 @@ Future<Uint8List> _buildKpiPdf(
 }
 
 pw.Widget _pdfKpiHeader(DateTime date, AppController controller) {
-  final session = controller.session.isEmpty ? 'Partie' : controller.session;
+  final session = controller.session.isEmpty ? 'Événement' : controller.session;
   return pw.Column(
     children: [
       pw.Center(

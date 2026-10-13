@@ -325,7 +325,8 @@ class _CreateSessionDialogState extends State<_CreateSessionDialog> {
   @override
   void initState() {
     super.initState();
-    field = TextEditingController(text: 'Partie ${dateLabel(DateTime.now())}');
+    field = TextEditingController(
+        text: 'Événement ${dateLabel(DateTime.now())}');
     loadingEvents = widget.controller.helloAssoSettings.isConfigured;
     if (loadingEvents) _fetchEvents();
   }
@@ -369,7 +370,7 @@ class _CreateSessionDialogState extends State<_CreateSessionDialog> {
                 controller: field,
                 autofocus: true,
                 decoration:
-                    const InputDecoration(labelText: 'Nom de la partie')),
+                    const InputDecoration(labelText: 'Nom de l\'événement')),
             if (helloAssoConfigured) ...[
               const SizedBox(height: 12),
               SwitchListTile(
@@ -378,7 +379,7 @@ class _CreateSessionDialogState extends State<_CreateSessionDialog> {
                 onChanged: events.isEmpty
                     ? null
                     : (value) => setState(() => selectedEventEnabled = value),
-                title: const Text('Lier un évènement HelloAsso'),
+                title: const Text('Lier un événement HelloAsso'),
               ),
               if (loadingEvents) const LinearProgressIndicator(),
               if (helloAssoError.isNotEmpty)
@@ -388,7 +389,7 @@ class _CreateSessionDialogState extends State<_CreateSessionDialog> {
                 DropdownButtonFormField<HelloAssoEvent>(
                   isExpanded: true,
                   initialValue: selectedEvent,
-                  decoration: const InputDecoration(labelText: 'Évènement'),
+                  decoration: const InputDecoration(labelText: 'Événement'),
                   items: [
                     for (final event in events)
                       DropdownMenuItem(

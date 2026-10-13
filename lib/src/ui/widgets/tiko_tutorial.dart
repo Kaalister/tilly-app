@@ -51,7 +51,7 @@ TikoTutorialContent tikoWelcomeTutorial() => const TikoTutorialContent(
     );
 
 TikoTutorialContent tikoFirebaseHelpTutorial() => const TikoTutorialContent(
-      title: 'Firebase',
+      title: 'Synchronisation',
       asset: _tikoThinkingAsset,
       expressionAssets: [
         _tikoThinkingAsset,
@@ -62,12 +62,12 @@ TikoTutorialContent tikoFirebaseHelpTutorial() => const TikoTutorialContent(
         _tikoThinkingAsset,
       ],
       messages: [
-        'Firebase est facultatif et sa synchronisation est entièrement manuelle. Tilly n\'envoie et ne récupère aucune donnée en arrière-plan.',
-        'Quand tu appuies sur Synchroniser, Tilly compare la dernière modification enregistrée sur cet appareil avec la version disponible dans Firebase.',
-        'Si les données locales sont les plus récentes, Tilly envoie leur version complète vers Firebase afin qu\'elle puisse être récupérée sur les autres appareils.',
-        'Si un autre appareil a envoyé une version plus récente, Tilly te prévient, crée une copie de sécurité, puis te propose de remplacer les données locales par cette nouvelle version.',
-        'Dans les règles Firestore, le chemin doit commencer exactement par organizations/default/users. Le mot default est utilisé tel quel par Tilly et ne doit pas être remplacé par le nom de ton association.',
-        'Évite de travailler sur deux appareils en même temps, car les modifications ne sont pas fusionnées ligne par ligne. Synchronise avant de changer d\'appareil, puis synchronise de nouveau lorsque tu as terminé.',
+        'La synchronisation est optionnelle : sans elle, Tilly fonctionne normalement sur cet appareil.',
+        'Elle sert à retrouver les mêmes données sur un autre appareil, par exemple un deuxième téléphone ou un ordinateur.',
+        'Tilly ne fait rien tout seul : tu appuies sur Synchroniser quand tu veux envoyer ou récupérer des données.',
+        'Si les données de cet appareil sont les plus récentes, elles sont envoyées pour être disponibles sur tes autres appareils.',
+        'Si un autre appareil a des données plus récentes, Tilly te prévient, crée une copie de sécurité, puis te propose de les récupérer.',
+        'Ne travaille pas sur deux appareils en même temps : synchronise avant de changer d\'appareil, puis une fois que tu as terminé.',
       ],
     );
 
@@ -138,7 +138,7 @@ TikoTutorialContent tikoOnboardingForTab(String tabId) {
         title: 'Historique',
         asset: _tikoThinkingAsset,
         messages: [
-          'La page Historique te permet de créer une nouvelle session, de rouvrir une ancienne partie et de consulter ses résultats.',
+          'La page Historique te permet de créer une nouvelle session, de rouvrir un ancien événement et de consulter ses résultats.',
         ],
       );
     case AppTabIds.articles:
@@ -200,9 +200,9 @@ TikoTutorialContent tikoTutorialForTab(String tabId) {
         ],
         messages: [
           'Avant de vendre, ajoute ici les joueurs de la session en renseignant au moins un prénom, un nom ou un email.',
-          'Si un joueur a déjà été enregistré sur une ancienne partie, sélectionne-le dans Participant existant pour éviter les doublons.',
+          'Si un joueur a déjà été enregistré sur un ancien événement, sélectionne-le dans Participant existant pour éviter les doublons.',
           'Quand tu choisis Adhérent, Tilly applique automatiquement le tarif adhérent dans Vente; quand tu choisis Public, il garde le prix public.',
-          'L\'historique par participant te permet de retrouver les ventes de chaque joueur et son total en fin de partie.',
+          'L\'historique par participant te permet de retrouver les ventes de chaque joueur et son total en fin d\'événement.',
         ],
       );
     case AppTabIds.cash:
@@ -263,7 +263,7 @@ TikoTutorialContent tikoTutorialForTab(String tabId) {
           _tikoSuccessAsset
         ],
         messages: [
-          'Une session correspond à une partie ou à une journée de vente, et Tilly sépare les ventes, les repas, la caisse et les bilans pour chacune.',
+          'Une session correspond à un événement ou à une journée de vente, et Tilly sépare les ventes, les repas, la caisse et les bilans pour chacune.',
           'Quand tu prépares un nouvel événement, crée une nouvelle session et donne-lui un nom clair avant le premier encaissement.',
           'Lorsque tu ouvres une ancienne session, elle redevient active; les prochains encaissements seront donc enregistrés dedans.',
           'Depuis une session qui contient des ventes, tu peux aussi générer son bilan PDF.',
@@ -299,7 +299,7 @@ TikoTutorialContent tikoTutorialForTab(String tabId) {
         ],
         messages: [
           'Dans Personnalisation, tu peux changer le nom, l\'image, la couleur et les onglets visibles sans supprimer les données des onglets masqués.',
-          'La partie HelloAsso sert à préparer les imports et les événements, tandis que Firebase sert à synchroniser les données entre appareils.',
+          'La partie HelloAsso sert à préparer les imports et les événements, tandis que la partie Synchronisation permet de retrouver les données sur un autre appareil.',
           'La partie Sauvegarde exporte toutes les données locales, et je te conseille d\'en faire une avant une mise à jour ou une restauration.',
           'La remise à zéro efface les données métier, donc utilise-la seulement après une sauvegarde et jamais au milieu des encaissements.',
         ],

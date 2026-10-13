@@ -28,7 +28,7 @@ class LocalDatabase {
     final dbPath = await _databasePath();
     _db = await openDatabase(
       dbPath,
-      version: 8,
+      version: 10,
       onConfigure: (db) => db.execute('PRAGMA foreign_keys = ON'),
       onCreate: _create,
       onUpgrade: _upgrade,
@@ -290,11 +290,13 @@ class LocalDatabase {
       if (oldVersion < 6) await _upgradeToV6(db);
       if (oldVersion < 7) await _upgradeToV7(db);
       if (oldVersion < 8) await _upgradeToV8(db);
+      if (oldVersion < 9) await _upgradeToV9(db);
+      if (oldVersion < 10) await _upgradeToV10(db);
       return;
     }
     final now = DateTime.now().toIso8601String();
     final sessionId = makeId('session');
-    var sessionName = 'Partie migrée';
+    var sessionName = 'Événement migré';
     final oldPlayers = <Map<String, Object?>>[];
     final oldArticles = <Map<String, Object?>>[];
     final oldSales = <Map<String, Object?>>[];
@@ -564,6 +566,29 @@ class LocalDatabase {
     await db.execute('DROP TABLE meal_orders_v7');
   }
 
+  Future<void> _upgradeToV9(Database db) async {
+    final columns = await db.rawQuery('PRAGMA table_info(sessions)');
+    if (!columns.any((column) => '${column['name']}' == 'name')) return;
+    for (final entry in const {
+      'Nouvelle partie': 'Nouvel événement',
+      'Partie': 'Événement',
+      'Partie importée': 'Événement importé',
+      'Partie migrée': 'Événement migré',
+    }.entries) {
+      await db.update('sessions', {'name': entry.value},
+          where: 'name = ?', whereArgs: [entry.key]);
+    }
+  }
+
+  Future<void> _upgradeToV10(Database db) async {
+    final tables = await db.rawQuery(
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'app_settings'");
+    if (tables.isEmpty) return;
+    await db.delete('app_settings',
+        where: 'key IN (?, ?)',
+        whereArgs: ['tutorial_welcome_seen', 'tutorial_pages_seen']);
+  }
+
   Future<void> _safeAddColumn(
       Database db, String table, String columnDefinition) async {
     try {
@@ -669,61 +694,6 @@ class LocalDatabase {
     }
   }
 
-  Future<bool> loadTutorialWelcomeSeen() async {
-    final db = await database;
-    final rows = await db.query('app_settings',
-        columns: ['value'],
-        where: 'key = ?',
-        whereArgs: ['tutorial_welcome_seen'],
-        limit: 1);
-    return rows.isNotEmpty && rows.first['value'] == 'true';
-  }
-
-  Future<void> saveTutorialWelcomeSeen() async {
-    final db = await database;
-    final now = DateTime.now().toIso8601String();
-    await db.insert(
-      'app_settings',
-      {
-        'key': 'tutorial_welcome_seen',
-        'value': 'true',
-        'updated_at': now,
-      },
-      conflictAlgorithm: ConflictAlgorithm.replace,
-    );
-  }
-
-  Future<Set<String>> loadTutorialPagesSeen() async {
-    final db = await database;
-    final rows = await db.query('app_settings',
-        columns: ['value'],
-        where: 'key = ?',
-        whereArgs: ['tutorial_pages_seen'],
-        limit: 1);
-    if (rows.isEmpty || rows.first['value'] == null) return {};
-    try {
-      return (jsonDecode('${rows.first['value']}') as List)
-          .map((value) => '$value')
-          .toSet();
-    } catch (_) {
-      return {};
-    }
-  }
-
-  Future<void> saveTutorialPagesSeen(Set<String> pageIds) async {
-    final db = await database;
-    final now = DateTime.now().toIso8601String();
-    await db.insert(
-      'app_settings',
-      {
-        'key': 'tutorial_pages_seen',
-        'value': jsonEncode(pageIds.toList()..sort()),
-        'updated_at': now,
-      },
-      conflictAlgorithm: ConflictAlgorithm.replace,
-    );
-  }
-
   Future<DateTime?> loadLocalUpdatedAt() async {
     final db = await database;
     final rows = await db.query('app_settings',
@@ -813,7 +783,7 @@ class LocalDatabase {
     final now = DateTime.now();
     final session = SessionRecord(
       id: makeId('session'),
-      name: name.trim().isEmpty ? 'Nouvelle partie' : name.trim(),
+      name: name.trim().isEmpty ? 'Nouvel événement' : name.trim(),
       eventDate: now,
       createdAt: now,
       helloassoFormSlug: helloassoEvent?.formSlug ?? '',
@@ -1373,26 +1343,24 @@ class LocalDatabase {
     }
   }
 
-  Future<Map<String, dynamic>> exportAll() async {
+  Future<Map<String, dynamic>> exportAll(
+      {bool includeConfiguration = true}) async {
     final db = await database;
+    final data = <String, dynamic>{
+      for (final entry in _portableBackupTables.entries)
+        entry.key: await db.query(entry.value),
+      'activeSessionId': await loadActiveSessionId(),
+    };
+    if (includeConfiguration) {
+      data['appSettings'] = await _exportAppSettings(db);
+    }
     return sanitizePortableBackupPayload({
-      'version': 3,
+      'format': tillyBackupFormat,
+      'version': backupFormatVersion,
       'exportedAt': DateTime.now().toIso8601String(),
       'identity': VisualIdentity.name,
-      'data': {
-        'sessions': await db.query('sessions'),
-        'players': await db.query('players'),
-        'sessionPlayers': await db.query('session_players'),
-        'articleCategories': await db.query('article_categories'),
-        'articles': await db.query('articles'),
-        'sales': await db.query('sales'),
-        'saleItems': await db.query('sale_items'),
-        'mealOrders': await db.query('meal_orders'),
-        'stockMovements': await db.query('stock_movements'),
-        'cashCounts': await db.query('cash_counts'),
-        'cashCountLines': await db.query('cash_count_lines'),
-        'appSettings': await _exportAppSettings(db),
-      },
+      'configurationIncluded': includeConfiguration,
+      'data': data,
     });
   }
 
@@ -1416,6 +1384,7 @@ class LocalDatabase {
   Future<void> replaceFromExport(Map<String, dynamic> payload) async {
     validateBackupPayload(payload);
     final data = Map<String, dynamic>.from(payload['data'] as Map? ?? {});
+    final importConfiguration = data['appSettings'] is List;
     final db = await database;
     await db.transaction((txn) async {
       for (final table in [
@@ -1430,7 +1399,7 @@ class LocalDatabase {
         'article_categories',
         'players',
         'sessions',
-        'app_settings'
+        if (importConfiguration) 'app_settings',
       ]) {
         await txn.delete(table);
       }
@@ -1472,8 +1441,38 @@ class LocalDatabase {
       await insertRows('stock_movements', 'stockMovements');
       await insertRows('cash_counts', 'cashCounts');
       await insertRows('cash_count_lines', 'cashCountLines');
-      await insertRows('app_settings', 'appSettings');
+      if (importConfiguration) {
+        await insertRows('app_settings', 'appSettings');
+      } else {
+        final activeSessionId = '${data['activeSessionId'] ?? ''}';
+        if (activeSessionId.isNotEmpty) {
+          await txn.insert(
+            'app_settings',
+            {
+              'key': 'active_session_id',
+              'value': activeSessionId,
+              'updated_at': DateTime.now().toIso8601String(),
+            },
+            conflictAlgorithm: ConflictAlgorithm.replace,
+          );
+        }
+      }
     });
+  }
+
+  Future<bool> hasBusinessActivity() async {
+    final db = await database;
+    Future<int> count(String table) async =>
+        Sqflite.firstIntValue(
+            await db.rawQuery('SELECT COUNT(*) FROM $table')) ??
+        0;
+
+    return await count('players') > 0 ||
+        await count('session_players') > 0 ||
+        await count('sales') > 0 ||
+        await count('sale_items') > 0 ||
+        await count('meal_orders') > 0 ||
+        await count('stock_movements') > 0;
   }
 
   Future<bool> hasOnlyBootstrapData() async {
@@ -1510,13 +1509,18 @@ class LocalDatabase {
 void validateBackupPayload(Map<String, dynamic> payload) {
   final version = (payload['version'] as num?)?.round();
   final data = payload['data'];
-  if (version == null || version < 2 || version > 3 || data is! Map) {
+  if (version == null ||
+      version < 2 ||
+      version > backupFormatVersion ||
+      data is! Map) {
     throw const FormatException('Version ou format de sauvegarde non supporté');
   }
   final typedData = Map<String, dynamic>.from(data);
-  final requiredTables = version >= 3
-      ? _backupTableSpecs.keys
-      : const ['sessions', 'articles', 'appSettings'];
+  final requiredTables = version >= backupFormatVersion
+      ? _portableBackupTables.keys
+      : version >= 3
+          ? _backupTableSpecs.keys
+          : const ['sessions', 'articles', 'appSettings'];
   for (final key in requiredTables) {
     if (typedData[key] is! List) {
       throw FormatException('Sauvegarde incomplète : données "$key" absentes');
@@ -1559,7 +1563,34 @@ void validateBackupPayload(Map<String, dynamic> payload) {
   }
 
   _validateBackupReferences(validatedRows);
+
+  if (version >= backupFormatVersion) {
+    final activeSessionId = '${typedData['activeSessionId'] ?? ''}';
+    if (activeSessionId.isNotEmpty &&
+        !validatedRows['sessions']!
+            .any((row) => '${row['id']}' == activeSessionId)) {
+      throw const FormatException(
+          'Sauvegarde invalide : la session active est absente');
+    }
+  }
 }
+
+const tillyBackupFormat = 'tilly';
+const backupFormatVersion = 4;
+
+const _portableBackupTables = <String, String>{
+  'sessions': 'sessions',
+  'players': 'players',
+  'sessionPlayers': 'session_players',
+  'articleCategories': 'article_categories',
+  'articles': 'articles',
+  'sales': 'sales',
+  'saleItems': 'sale_items',
+  'mealOrders': 'meal_orders',
+  'stockMovements': 'stock_movements',
+  'cashCounts': 'cash_counts',
+  'cashCountLines': 'cash_count_lines',
+};
 
 class _BackupTableSpec {
   const _BackupTableSpec({

@@ -62,7 +62,8 @@ https://support.apple.com/en-euro/guide/mac-help/mh40616/mac
 Pour conserver les donnees :
 
 1. Ouvrir l'application actuelle.
-2. Exporter une sauvegarde JSON depuis l'ecran de configuration.
+2. Exporter une sauvegarde `.tilly` depuis **Config > Sauvegarde &
+   restauration**.
 3. Installer la nouvelle version par-dessus l'ancienne.
 4. Ne pas desinstaller l'application.
 5. Ne pas effacer les donnees de l'application.
@@ -355,7 +356,7 @@ Les modifications ne sont pas fusionnees ligne par ligne.
 5. Si Firebase contient des donnees plus recentes, confirmer la restauration.
 6. Verifier que les donnees ont ete recuperees.
 
-Avant une restauration depuis Firebase, faire une sauvegarde JSON si
+Avant une restauration depuis Firebase, faire une sauvegarde `.tilly` si
 l'application le propose.
 
 Ne pas travailler sur deux appareils en meme temps. Synchroniser avant de
@@ -468,7 +469,7 @@ Ne pas le publier :
 - dans un message partage a des personnes non autorisees.
 
 Le secret HelloAsso ne doit pas etre synchronise dans Firebase et ne doit pas
-etre inclus dans les exports JSON.
+etre inclus dans les sauvegardes `.tilly`.
 
 ## 14. Limite importante
 

@@ -107,6 +107,18 @@ class AppTabIds {
     bilan,
     articles,
   ];
+
+  static const all = <String>[
+    sales,
+    meals,
+    players,
+    cash,
+    stats,
+    bilan,
+    history,
+    articles,
+    config,
+  ];
 }
 
 const _defaultMainTabVisibility = <String, bool>{
@@ -244,7 +256,7 @@ class SessionRecord {
 
   factory SessionRecord.fromJson(Map<String, dynamic> json) => SessionRecord(
         id: '${json['id'] ?? makeId('session')}',
-        name: '${json['name'] ?? json['session'] ?? 'Partie'}',
+        name: '${json['name'] ?? json['session'] ?? 'Événement'}',
         eventDate: DateTime.tryParse(
                 '${json['eventDate'] ?? json['event_date'] ?? ''}') ??
             DateTime.now(),

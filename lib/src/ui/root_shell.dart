@@ -1,8 +1,8 @@
 import 'dart:io';
 
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
+import '../config/app_config.dart';
 import '../controllers/app_controller.dart';
 import '../domain/models.dart';
 import '../platform/backup_and_links.dart';
@@ -18,6 +18,7 @@ import 'pages/meals_page.dart';
 import 'pages/players_page.dart';
 import 'pages/sales_page.dart';
 import 'theme.dart';
+import 'widgets/app_update_dialog.dart';
 import 'widgets/common_widgets.dart';
 import 'widgets/license_banner.dart';
 import 'widgets/tiko_tutorial.dart';
@@ -37,12 +38,8 @@ class RootShell extends StatefulWidget {
 }
 
 class _RootShellState extends State<RootShell> {
-  late final Future<void> _initialLoad;
   AppUpdateResult? updateResult;
   bool checkingUpdate = false;
-  bool openingUpdate = false;
-  String? updateActionError;
-  String? updateBackupStatus;
   bool _tutorialTourQueued = false;
   bool _tutorialTourRunning = false;
   bool _welcomeDialogShown = false;
@@ -56,19 +53,17 @@ class _RootShellState extends State<RootShell> {
   @override
   void initState() {
     super.initState();
-    _initialLoad = controller.load();
+    controller.load();
     _checkForUpdate();
   }
 
   Future<void> _checkForUpdate() async {
-    if (!kReleaseMode || !AppUpdateService.supportedPlatform) {
+    if (!updateCheckEnabled || !AppUpdateService.supportedPlatform) {
       return;
     }
-    setState(() {
-      checkingUpdate = true;
-      updateActionError = null;
-    });
-    final result = await AppUpdateService.check();
+    setState(() => checkingUpdate = true);
+    final result =
+        await AppUpdateService.check(authToken: licenseService.authToken);
     if (!mounted) return;
     setState(() {
       updateResult = result;
@@ -85,45 +80,11 @@ class _RootShellState extends State<RootShell> {
     if (result.error != null) snack(context, result.error!);
   }
 
-  Future<void> _openUpdate(AppUpdateInfo update) async {
-    if (openingUpdate) return;
-    setState(() {
-      openingUpdate = true;
-      updateActionError = null;
-      updateBackupStatus = null;
-    });
-    try {
-      await _initialLoad;
-      final recoveryFile = await saveRecoveryBackup(controller, 'mise-a-jour');
-      if (!mounted) return;
-      setState(() {
-        updateBackupStatus =
-            'Copie de sécurité créée : ${recoveryFile['name']}';
-      });
-      await openExternalUrl(update.downloadUrl);
-    } catch (error) {
-      if (mounted) setState(() => updateActionError = '$error');
-    } finally {
-      if (mounted) setState(() => openingUpdate = false);
-    }
-  }
-
   @override
   Widget build(BuildContext context) {
     return AnimatedBuilder(
       animation: Listenable.merge([controller, licenseService]),
       builder: (context, _) {
-        final requiredUpdate = updateResult?.update;
-        if (requiredUpdate != null) {
-          return UpdateRequiredScaffold(
-            update: requiredUpdate,
-            opening: openingUpdate,
-            actionError: updateActionError,
-            backupStatus: updateBackupStatus,
-            onDownload: () => _openUpdate(requiredUpdate),
-            onRetry: _checkForUpdate,
-          );
-        }
         if (controller.loading) {
           return const Scaffold(
               body: Center(child: CircularProgressIndicator()));
@@ -144,12 +105,15 @@ class _RootShellState extends State<RootShell> {
           );
         }
         controller.readOnly = readOnly;
-        final destinations = _visibleShellDestinations(controller,
+        final allDestinations = _shellDestinations(controller,
             licenseService: licenseService,
             updateResult: updateResult,
             checkingUpdate: checkingUpdate,
-            onCheckUpdate: _checkForUpdate,
-            onOpenUpdate: _openUpdate);
+            onCheckUpdate: _checkForUpdate);
+        final destinations = allDestinations
+            .where((destination) => _isShellDestinationVisible(
+                controller, destination))
+            .toList();
         var selectedIndex = destinations.indexWhere(
             (destination) => destination.tabIndex == controller.tab);
         if (selectedIndex < 0) {
@@ -159,23 +123,27 @@ class _RootShellState extends State<RootShell> {
           });
         }
         final selectedDestination = destinations[selectedIndex];
+        final stackIndex = allDestinations.indexOf(selectedDestination);
         _queueAutomaticTutorial(destinations, selectedDestination.id);
-        return _buildLayout(destinations, selectedIndex, selectedDestination);
+        return _buildLayout(allDestinations, destinations, stackIndex,
+            selectedIndex, selectedDestination);
       },
     );
   }
 
   Widget _buildLayout(
+      List<_ShellDestination> allDestinations,
       List<_ShellDestination> destinations,
+      int stackIndex,
       int selectedIndex,
       _ShellDestination selectedDestination) {
     return LayoutBuilder(
       builder: (context, constraints) {
         final tablet = constraints.maxWidth >= 900;
         final body = IndexedStack(
-          index: selectedIndex,
+          index: stackIndex,
           children: [
-            for (final destination in destinations) destination.page,
+            for (final destination in allDestinations) destination.page,
           ],
         );
         final readOnly = licenseService.isReadOnly;
@@ -230,7 +198,7 @@ class _RootShellState extends State<RootShell> {
               constraints: const BoxConstraints(maxWidth: 170),
               child: Text(
                   controller.session.isEmpty
-                      ? 'PARTIE'
+                      ? 'ÉVÉNEMENT'
                       : controller.session,
                   overflow: TextOverflow.ellipsis),
             ),
@@ -259,6 +227,7 @@ class _RootShellState extends State<RootShell> {
     return Column(
       children: [
         _buildLicenseBanner(context),
+        _buildUpdateBanner(context),
         Expanded(
           child: Row(
             children: [
@@ -290,8 +259,44 @@ class _RootShellState extends State<RootShell> {
     return Column(
       children: [
         _buildLicenseBanner(context),
+        _buildUpdateBanner(context),
         Expanded(child: body),
       ],
+    );
+  }
+
+  Widget _buildUpdateBanner(BuildContext context) {
+    final update = updateResult?.update;
+    if (update == null) return const SizedBox.shrink();
+    return Material(
+      color: AppColors.surface2,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(12, 8, 8, 8),
+        child: Row(
+          children: [
+            const Icon(Icons.system_update,
+                color: AppColors.accent, size: 20),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Text(
+                'Mise à jour ${update.latestVersion} disponible. '
+                'Tes données et ta connexion sont conservées.',
+                style: const TextStyle(fontSize: 13, height: 1.3),
+              ),
+            ),
+            const SizedBox(width: 8),
+            FilledButton.tonal(
+              onPressed: () => showAppUpdateDialog(
+                context,
+                update: update,
+                controller: controller,
+                authToken: licenseService.authToken,
+              ),
+              child: const Text('Mettre à jour'),
+            ),
+          ],
+        ),
+      ),
     );
   }
 
@@ -415,11 +420,12 @@ class _RootShellState extends State<RootShell> {
     final value = await showDialog<String>(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('Nom de la partie'),
+        title: const Text('Nom de l\'événement'),
         content: TextFormField(
           initialValue: draftName,
           autofocus: true,
-          decoration: const InputDecoration(labelText: 'Ex: Dimanche CQB'),
+          decoration:
+              const InputDecoration(labelText: 'Ex: Fête de l\'association'),
           textInputAction: TextInputAction.done,
           onChanged: (value) => draftName = value,
           onFieldSubmitted: (value) => Navigator.pop(context, value),
@@ -627,15 +633,27 @@ class _ShellDestination {
   final Widget page;
 }
 
-List<_ShellDestination> _visibleShellDestinations(
+bool _isShellDestinationVisible(
+  AppController controller,
+  _ShellDestination destination,
+) {
+  if (destination.id == AppTabIds.meals && !controller.mealsEnabled) {
+    return false;
+  }
+  if (AppTabIds.configurable.contains(destination.id)) {
+    return controller.isMainTabVisible(destination.id);
+  }
+  return true;
+}
+
+List<_ShellDestination> _shellDestinations(
   AppController controller, {
   required LicenseService licenseService,
   required AppUpdateResult? updateResult,
   required bool checkingUpdate,
   required VoidCallback onCheckUpdate,
-  required Future<void> Function(AppUpdateInfo update) onOpenUpdate,
 }) {
-  final all = [
+  return [
     _ShellDestination(
       id: AppTabIds.sales,
       tabIndex: 0,
@@ -703,19 +721,9 @@ List<_ShellDestination> _visibleShellDestinations(
         updateResult: updateResult,
         checkingUpdate: checkingUpdate,
         onCheckUpdate: onCheckUpdate,
-        onOpenUpdate: onOpenUpdate,
       ),
     ),
   ];
-  return all.where((destination) {
-    if (destination.id == AppTabIds.meals && !controller.mealsEnabled) {
-      return false;
-    }
-    if (AppTabIds.configurable.contains(destination.id)) {
-      return controller.isMainTabVisible(destination.id);
-    }
-    return true;
-  }).toList();
 }
 
 class _AppTitleIcon extends StatelessWidget {
@@ -740,124 +748,5 @@ class _AppTitleIcon extends StatelessWidget {
       );
     }
     return Icon(Icons.bolt, color: context.primaryAccent);
-  }
-}
-
-class UpdateRequiredScaffold extends StatelessWidget {
-  const UpdateRequiredScaffold({
-    required this.update,
-    required this.opening,
-    required this.onDownload,
-    required this.onRetry,
-    this.actionError,
-    this.backupStatus,
-    super.key,
-  });
-
-  final AppUpdateInfo update;
-  final bool opening;
-  final String? actionError;
-  final String? backupStatus;
-  final VoidCallback onDownload;
-  final VoidCallback onRetry;
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: AppColors.bg,
-      body: SafeArea(
-        child: Center(
-          child: ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 560),
-            child: Padding(
-              padding: const EdgeInsets.all(20),
-              child: TacticalCard(
-                borderColor: AppColors.warn,
-                padding: const EdgeInsets.all(20),
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    const Icon(Icons.system_update,
-                        color: AppColors.accent, size: 42),
-                    const SizedBox(height: 14),
-                    const Text(
-                      'Mise à jour obligatoire',
-                      textAlign: TextAlign.center,
-                      style:
-                          TextStyle(fontSize: 24, fontWeight: FontWeight.w900),
-                    ),
-                    const SizedBox(height: 10),
-                    Text(
-                      'Version installée : ${update.currentVersion}\n'
-                      'Version disponible : ${update.latestVersion}',
-                      textAlign: TextAlign.center,
-                      style: const TextStyle(color: AppColors.muted),
-                    ),
-                    if (update.publishedAt != null) ...[
-                      const SizedBox(height: 8),
-                      Text(
-                        'Publiée le ${dateLabel(update.publishedAt!)} à ${timeLabel(update.publishedAt!)}',
-                        textAlign: TextAlign.center,
-                        style: const TextStyle(color: AppColors.muted),
-                      ),
-                    ],
-                    const SizedBox(height: 14),
-                    Text(
-                      Platform.isAndroid
-                          ? 'Installe le nouvel APK par-dessus l\'application existante. Ne la désinstalle pas et n\'efface pas ses données : la connexion Firebase, la configuration HelloAsso et la base locale sont alors conservées.'
-                          : Platform.isMacOS
-                              ? 'Ouvre l\'image disque puis remplace Tilly dans Applications. Ne supprime pas les données de l\'application : la connexion Firebase, la configuration HelloAsso et la base locale sont alors conservées.'
-                              : 'Exécute l\'installateur sur l\'installation existante. Ne supprime pas les données de l\'application : la connexion Firebase, la configuration HelloAsso et la base locale sont alors conservées.',
-                      textAlign: TextAlign.center,
-                      style: const TextStyle(color: AppColors.muted),
-                    ),
-                    const SizedBox(height: 18),
-                    FilledButton.icon(
-                      onPressed: opening ? null : onDownload,
-                      icon: opening
-                          ? const SizedBox.square(
-                              dimension: 18,
-                              child: CircularProgressIndicator(strokeWidth: 2),
-                            )
-                          : const Icon(Icons.download),
-                      label: Text(
-                        Platform.isAndroid
-                            ? 'Sauvegarder puis télécharger l\'APK'
-                            : Platform.isMacOS
-                                ? 'Sauvegarder puis télécharger le DMG'
-                                : 'Sauvegarder puis télécharger l\'installateur',
-                      ),
-                    ),
-                    const SizedBox(height: 8),
-                    OutlinedButton.icon(
-                      onPressed: opening ? null : onRetry,
-                      icon: const Icon(Icons.refresh),
-                      label: const Text('Re-vérifier'),
-                    ),
-                    if (backupStatus != null) ...[
-                      const SizedBox(height: 12),
-                      Text(
-                        backupStatus!,
-                        textAlign: TextAlign.center,
-                        style: const TextStyle(color: AppColors.accent),
-                      ),
-                    ],
-                    if (actionError != null) ...[
-                      const SizedBox(height: 12),
-                      Text(
-                        actionError!,
-                        textAlign: TextAlign.center,
-                        style: const TextStyle(color: AppColors.danger),
-                      ),
-                    ],
-                  ],
-                ),
-              ),
-            ),
-          ),
-        ),
-      ),
-    );
   }
 }

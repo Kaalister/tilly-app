@@ -55,14 +55,24 @@ Implemented the Tilly license client (Flutter multi-platform cash register app) 
 - `lib/src/services/license/license_service.dart` - Add @override dispose
 - `test/widget_test.dart` - Add _MockLicenseService, fix test finders
 
-## Environment Configuration (.env)
-- Added `flutter_dotenv` for runtime API URL selection.
+## Version Applicative (2026-10-06)
+- `appBuildVersion` (dans `app_config.dart`) est desormais une variable resolue au demarrage par `initializeAppVersion()` (`package_info_plus`).
+- Priorite : `--dart-define=APP_VERSION` > version du binaire (Android `versionName`, macOS `CFBundleShortVersionString`, Windows) > repli `1.0.0`.
+- Le controle de MAJ est actif en release, ou en debug avec `DEV_UPDATE_CHECK=true` (`.env.dev` ou `--dart-define=DEV_UPDATE_CHECK=true`).
+- `--dart-define=DEV_LICENSE=valid|none|grace|server|blocked|expired` (debug uniquement, ignore en release) force l'etat de licence sans reseau ni stockage ; l'enveloppe locale reste lue pour conserver le scope de donnees.
+- `--dart-define=DEV_DEMO_DATA=true` (debug uniquement) : au premier lancement, remplit une base vide (ou sans activite) avec 3 journees de demonstration (10 participants, 21 ventes, stocks, comptages). Ne s'applique jamais si des ventes/participants existent.
+- `--dart-define=DEV_TUTORIAL=on|off` (debug uniquement) : force le tuto (on) ou le desactive (off).
+- Android : `build.gradle` utilise le dernier tag git comme `versionName`/`versionCode` quand aucun `--build-name` n'est fourni (Android Studio inclus).
+- Les builds release doivent passer `--build-name` **et** `--dart-define=APP_VERSION` : Dockerfile VPS, workflows macOS et Windows.
+- Tests : pas de plugin, repli `1.0.0` ; `PackageInfo.setMockInitialValues` pour tester la resolution.
+
+## Environment Configuration (dotenv + dart-define)
 - `.env.dev` (committed): debug builds → `http://localhost:3000`.
-- `.env` (committed): profile/release builds → `https://tilly.orceus.fr`.
+- `.env` is **not versioned anymore** (gitignored): release builds use the compiled default `https://tilly.orceus.fr`.
+- `--dart-define=LICENSE_API_URL=...` overrides everything (local release tests, physical devices).
 - `lib/main.dart` loads `.env.dev` in debug, `.env` otherwise (optional, falls back to compiled defaults).
-- `lib/src/config/app_config.dart` exposes `licenseApiBaseUrl` getter reading `LICENSE_API_URL`.
-- CI validates `.env` points to production before release builds.
-- Never put localhost in `.env` (bundled into shipped artifacts).
+- `lib/src/config/app_config.dart` exposes `licenseApiBaseUrl` (dart-define > dotenv > compiled default).
+- Never ship a build containing a local URL.
 
 ## Licence v2: Ed25519, coveredVersion, VERSION_NOT_COVERED (2026-10-01)
 - Real Ed25519 verification enabled (`cryptography` 2.9):
@@ -164,7 +174,7 @@ Implemented the Tilly license client (Flutter multi-platform cash register app) 
 ## Android Dev Networking (2026-10-01)
 - Android emulator cannot use `localhost` (refers to emulator itself).
 - `app_config.dart` rewrites `localhost`/`127.0.0.1` -> `10.0.2.2` in Android debug builds only.
-- Physical Android devices: set LAN IP in `.env.dev` (e.g. `http://192.168.1.128:3000`).
+- Physical Android devices: pass the LAN IP via `--dart-define=LICENSE_API_URL=http://192.168.1.128:3000`.
 - `android/app/src/debug/AndroidManifest.xml` sets `usesCleartextTraffic="true"` with `tools:replace` (release stays `false`).
 - Verified merged debug manifest and `flutter build apk --debug`.
 
@@ -181,6 +191,7 @@ Implemented the Tilly license client (Flutter multi-platform cash register app) 
 3. **Android donation keyboard** - Removed `ValueKey` causing keyboard dismiss
 4. **Meal status rollback** - Added `unserveMeal`/`unprepareMeal` methods + UI buttons
 5. **Settings scroll reset** - `_ConfigTabBody` uses `AutomaticKeepAliveClientMixin`
+6. **Tutorial state is device-level** - `TutorialStore` (shared_preferences), independent from the per-account DB; legacy `tutorial_*` rows are deleted by the SQLite v10 migration. No migration to the store (app not in production)
 
 ## Current Status
 - ✅ All 41 tests pass

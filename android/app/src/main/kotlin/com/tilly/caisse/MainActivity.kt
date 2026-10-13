@@ -8,6 +8,8 @@ import android.os.Build
 import android.os.Environment
 import android.provider.MediaStore
 import android.provider.OpenableColumns
+import android.provider.Settings
+import androidx.core.content.FileProvider
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
@@ -21,8 +23,8 @@ class MainActivity : FlutterActivity() {
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, FILE_IMPORT_CHANNEL)
             .setMethodCallHandler { call, result ->
                 when (call.method) {
-                    "pickJsonBackup" -> openJsonBackupPicker(result)
-                    "saveJsonBackup" -> saveJsonBackup(
+                    "pickBackup" -> openBackupPicker(result)
+                    "saveBackup" -> saveBackup(
                         call.argument("name"),
                         call.argument("content"),
                         result
@@ -32,6 +34,10 @@ class MainActivity : FlutterActivity() {
                         call.argument("bytes"),
                         result
                     )
+                    "installApk" -> installApk(
+                        call.argument("path"),
+                        result
+                    )
                     "openUrl" -> openUrl(
                         call.argument("url"),
                         result
@@ -39,6 +45,47 @@ class MainActivity : FlutterActivity() {
                     else -> result.notImplemented()
                 }
             }
+    }
+
+    private fun installApk(path: String?, result: MethodChannel.Result) {
+        val apk = path?.trim()
+        if (apk.isNullOrBlank() || !File(apk).exists()) {
+            result.error("invalid_path", "Fichier de mise à jour introuvable.", null)
+            return
+        }
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O &&
+            !packageManager.canRequestPackageInstalls()
+        ) {
+            try {
+                startActivity(
+                    Intent(
+                        Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
+                        Uri.parse("package:$packageName")
+                    )
+                )
+            } catch (_: Exception) {
+                // L'écran de réglage n'est pas disponible : on guide l'utilisateur.
+            }
+            result.error(
+                "install_permission_required",
+                "Autorise Tilly à installer des applications, puis réessaie.",
+                null
+            )
+            return
+        }
+
+        try {
+            val uri = FileProvider.getUriForFile(this, "$packageName.fileprovider", File(apk))
+            val intent = Intent(Intent.ACTION_VIEW).apply {
+                setDataAndType(uri, "application/vnd.android.package-archive")
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            startActivity(intent)
+            result.success(true)
+        } catch (error: Exception) {
+            result.error("install_failed", "Impossible de lancer l'installation.", error.message)
+        }
     }
 
     private fun openUrl(url: String?, result: MethodChannel.Result) {
@@ -56,19 +103,19 @@ class MainActivity : FlutterActivity() {
         }
     }
 
-    private fun saveJsonBackup(name: String?, content: String?, result: MethodChannel.Result) {
+    private fun saveBackup(name: String?, content: String?, result: MethodChannel.Result) {
         val json = content
         if (json.isNullOrBlank()) {
             result.error("empty_export", "Le contenu de l'export est vide.", null)
             return
         }
 
-        val fileName = safeJsonFileName(name)
+        val fileName = safeBackupFileName(name)
         try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                 val values = ContentValues().apply {
                     put(MediaStore.MediaColumns.DISPLAY_NAME, fileName)
-                    put(MediaStore.MediaColumns.MIME_TYPE, "application/json")
+                    put(MediaStore.MediaColumns.MIME_TYPE, "application/octet-stream")
                     put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS)
                     put(MediaStore.MediaColumns.IS_PENDING, 1)
                 }
@@ -103,14 +150,14 @@ class MainActivity : FlutterActivity() {
         }
     }
 
-    private fun safeJsonFileName(name: String?): String {
+    private fun safeBackupFileName(name: String?): String {
         val baseName = name
             ?.trim()
             ?.replace(Regex("[^A-Za-z0-9._-]+"), "-")
             ?.trim('-', '.', '_')
             ?.takeIf { it.isNotEmpty() }
-            ?: "tilly-export.json"
-        return if (baseName.endsWith(".json", ignoreCase = true)) baseName else "$baseName.json"
+            ?: "tilly-export.tilly"
+        return if (baseName.endsWith(".tilly", ignoreCase = true)) baseName else "$baseName.tilly"
     }
 
     private fun savePdf(name: String?, bytes: ByteArray?, result: MethodChannel.Result) {
@@ -170,7 +217,7 @@ class MainActivity : FlutterActivity() {
         return if (baseName.endsWith(".pdf", ignoreCase = true)) baseName else "$baseName.pdf"
     }
 
-    private fun openJsonBackupPicker(result: MethodChannel.Result) {
+    private fun openBackupPicker(result: MethodChannel.Result) {
         if (pendingImportResult != null) {
             result.error("picker_already_open", "Un sélecteur de fichier est déjà ouvert.", null)
             return
@@ -179,15 +226,11 @@ class MainActivity : FlutterActivity() {
 
         val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
             addCategory(Intent.CATEGORY_OPENABLE)
-            type = "application/json"
-            putExtra(
-                Intent.EXTRA_MIME_TYPES,
-                arrayOf("application/json", "text/json", "text/plain", "application/octet-stream")
-            )
+            type = "*/*"
         }
 
         try {
-            startActivityForResult(intent, PICK_JSON_BACKUP_REQUEST)
+            startActivityForResult(intent, PICK_BACKUP_REQUEST)
         } catch (error: Exception) {
             pendingImportResult = null
             result.error("picker_unavailable", "Impossible d'ouvrir le sélecteur de fichier.", error.message)
@@ -197,7 +240,7 @@ class MainActivity : FlutterActivity() {
     @Deprecated("Deprecated in Java")
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
-        if (requestCode != PICK_JSON_BACKUP_REQUEST) return
+        if (requestCode != PICK_BACKUP_REQUEST) return
 
         val result = pendingImportResult ?: return
         pendingImportResult = null
@@ -223,7 +266,7 @@ class MainActivity : FlutterActivity() {
             }
             result.success(
                 mapOf(
-                    "name" to (displayName(uri) ?: "sauvegarde.json"),
+                    "name" to (displayName(uri) ?: "sauvegarde.tilly"),
                     "content" to content
                 )
             )
@@ -242,6 +285,6 @@ class MainActivity : FlutterActivity() {
 
     companion object {
         private const val FILE_IMPORT_CHANNEL = "tilly/file_import"
-        private const val PICK_JSON_BACKUP_REQUEST = 7301
+        private const val PICK_BACKUP_REQUEST = 7301
     }
 }

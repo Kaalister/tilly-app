@@ -96,7 +96,7 @@ class LicenseBanner extends StatelessWidget {
 
   Future<void> _openReleases(BuildContext context) async {
     try {
-      await openExternalUrl(githubReleasesUrl);
+      await openExternalUrl(downloadsPageUrl);
     } catch (_) {
       if (context.mounted) {
         snack(context, 'Impossible d\'ouvrir le navigateur.');

@@ -15,6 +15,40 @@ if (keystorePropertiesFile.exists()) {
     keystoreProperties.load(new FileInputStream(keystorePropertiesFile))
 }
 
+def pubspecVersionName = {
+    def pubspec = rootProject.file("../pubspec.yaml")
+    if (!pubspec.exists()) {
+        return null
+    }
+    def matcher = pubspec.text =~ /(?m)^version:\s*([0-9]+\.[0-9]+\.[0-9]+)/
+    return matcher.find() ? matcher.group(1) : null
+}()
+
+def gitTagVersionName = {
+    try {
+        def stdout = new ByteArrayOutputStream()
+        exec {
+            workingDir = rootProject.projectDir
+            commandLine "git", "describe", "--tags", "--abbrev=0"
+            standardOutput = stdout
+            errorOutput = new ByteArrayOutputStream()
+            ignoreExitValue = true
+        }
+        def tag = stdout.toString().trim()
+        return (tag ==~ /^v?\d+(\.\d+){1,2}$/) ? tag.replaceFirst(/^v/, "") : null
+    } catch (ignored) {
+        return null
+    }
+}()
+
+def buildNumberForVersion = { String version ->
+    def parts = version.tokenize(".").collect { it.isInteger() ? it.toInteger() : 0 }
+    while (parts.size() < 3) {
+        parts.add(0)
+    }
+    return Math.max(parts[0] * 1000000 + parts[1] * 1000 + parts[2], 1)
+}
+
 android {
     namespace = "com.tilly.caisse"
     compileSdk = flutter.compileSdkVersion
@@ -35,6 +69,12 @@ android {
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
         versionName = flutter.versionName
+        if (gitTagVersionName != null &&
+                pubspecVersionName != null &&
+                flutter.versionName == pubspecVersionName) {
+            versionName = gitTagVersionName
+            versionCode = buildNumberForVersion(gitTagVersionName)
+        }
     }
 
     signingConfigs {
@@ -49,6 +89,11 @@ android {
     }
 
     buildTypes {
+        debug {
+            if (keystorePropertiesFile.exists()) {
+                signingConfig = signingConfigs.release
+            }
+        }
         release {
             signingConfig = signingConfigs.release
         }
