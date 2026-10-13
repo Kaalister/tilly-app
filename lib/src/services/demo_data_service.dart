@@ -1,10 +1,14 @@
 import '../domain/models.dart';
+import 'meal_service.dart';
+
+final _mealService = MealService();
 
 class DemoDay {
   const DemoDay({
     required this.session,
     required this.players,
     required this.sales,
+    required this.meals,
     required this.cashStart,
     required this.cashEnd,
     required this.stockMovements,
@@ -13,6 +17,7 @@ class DemoDay {
   final SessionRecord session;
   final List<Player> players;
   final List<Sale> sales;
+  final List<MealOrder> meals;
   final Map<String, int> cashStart;
   final Map<String, int> cashEnd;
   final List<StockMovement> stockMovements;
@@ -44,6 +49,7 @@ DemoDataset buildDemoDataset({DateTime? now}) {
       articles: articles,
       dayPlayers: players.sublist(0, 6),
       specs: _dayOneSales,
+      mealSpecs: _dayOneMeals,
       cashStart: _cashStart,
       cashEnd: const {
         '50': 1,
@@ -61,6 +67,7 @@ DemoDataset buildDemoDataset({DateTime? now}) {
       articles: articles,
       dayPlayers: players.sublist(2, 8),
       specs: _dayTwoSales,
+      mealSpecs: _dayTwoMeals,
       cashStart: _cashStart,
       cashEnd: const {
         '50': 1,
@@ -78,6 +85,7 @@ DemoDataset buildDemoDataset({DateTime? now}) {
       articles: articles,
       dayPlayers: players.sublist(4, 10),
       specs: _dayThreeSales,
+      mealSpecs: _dayThreeMeals,
       cashStart: _cashStart,
       cashEnd: const {
         '50': 1,
@@ -90,7 +98,7 @@ DemoDataset buildDemoDataset({DateTime? now}) {
     ),
   ];
   return DemoDataset(
-    categories: const ['BOISSONS', 'SNACKING', 'GOODIES', 'LOCATION'],
+    categories: const ['BOISSONS', 'REPAS', 'SNACKING', 'GOODIES', 'LOCATION'],
     articles: articles,
     players: players,
     days: days,
@@ -206,6 +214,28 @@ List<Article> _demoArticles() => [
         stock: 30,
         threshold: 8,
       ),
+      Article(
+        id: makeId('article'),
+        category: 'REPAS',
+        type: 'standard',
+        icon: '🍽️',
+        name: 'Repas Standard',
+        price: 8,
+        memberPrice: 7,
+        stock: 40,
+        threshold: 10,
+      ),
+      Article(
+        id: makeId('article'),
+        category: 'REPAS',
+        type: 'standard',
+        icon: '🥗',
+        name: 'Repas végétarien',
+        price: 8,
+        memberPrice: 7,
+        stock: 15,
+        threshold: 4,
+      ),
     ];
 
 List<Player> _demoPlayers() {
@@ -289,6 +319,167 @@ const _dayThreeSales = <_DemoSaleSpec>[
   _DemoSaleSpec(player: 0, hour: 17, minute: 25, items: [(1, 1), (4, 2)]),
 ];
 
+class _DemoMealSpec {
+  const _DemoMealSpec({
+    required this.player,
+    required this.hour,
+    required this.minute,
+    required this.source,
+    required this.status,
+    required this.meal,
+    this.payment = 'ESP',
+    this.formula = 'Standard',
+    this.options = const [],
+    this.note = '',
+    this.drink = -1,
+    this.snack = -1,
+  });
+
+  final int player;
+  final int hour;
+  final int minute;
+  final String source;
+  final String status;
+  final int meal;
+  final String payment;
+  final String formula;
+  final List<String> options;
+  final String note;
+  final int drink;
+  final int snack;
+}
+
+// Index des articles REPAS : 9 = Repas Standard, 10 = Repas végétarien.
+const _dayOneMeals = <_DemoMealSpec>[
+  _DemoMealSpec(
+    player: 0,
+    hour: 12,
+    minute: 0,
+    source: 'helloasso',
+    status: 'served',
+    meal: 9,
+    drink: 0,
+    snack: 4,
+    options: ['Ketchup'],
+  ),
+  _DemoMealSpec(
+    player: 1,
+    hour: 12,
+    minute: 20,
+    source: 'helloasso',
+    status: 'served',
+    meal: 10,
+    drink: 1,
+    snack: 3,
+    options: ['Sans porc'],
+  ),
+  _DemoMealSpec(
+    player: 3,
+    hour: 13,
+    minute: 10,
+    source: 'onsite',
+    status: 'served',
+    meal: 9,
+    drink: 2,
+    snack: 4,
+    note: 'Achat sur place',
+  ),
+];
+
+const _dayTwoMeals = <_DemoMealSpec>[
+  _DemoMealSpec(
+    player: 1,
+    hour: 12,
+    minute: 30,
+    source: 'helloasso',
+    status: 'served',
+    meal: 9,
+    drink: 1,
+    snack: 4,
+    options: ['Sans sauce'],
+  ),
+  _DemoMealSpec(
+    player: 2,
+    hour: 13,
+    minute: 0,
+    source: 'onsite',
+    status: 'served',
+    meal: 10,
+    drink: 0,
+    formula: 'Boisson seule',
+    note: 'Achat sur place',
+  ),
+  _DemoMealSpec(
+    player: 4,
+    hour: 13,
+    minute: 45,
+    source: 'helloasso',
+    status: 'served',
+    meal: 9,
+    drink: 2,
+    snack: 3,
+  ),
+];
+
+const _dayThreeMeals = <_DemoMealSpec>[
+  _DemoMealSpec(
+    player: 0,
+    hour: 12,
+    minute: 15,
+    source: 'helloasso',
+    status: 'served',
+    meal: 9,
+    drink: 1,
+    snack: 4,
+    options: ['Mayonnaise'],
+  ),
+  _DemoMealSpec(
+    player: 2,
+    hour: 12,
+    minute: 45,
+    source: 'helloasso',
+    status: 'prepared',
+    meal: 10,
+    drink: 0,
+    snack: 3,
+  ),
+  _DemoMealSpec(
+    player: 4,
+    hour: 13,
+    minute: 20,
+    source: 'onsite',
+    status: 'served',
+    payment: 'PayPal',
+    meal: 9,
+    drink: 2,
+    snack: 4,
+    note: 'Achat sur place',
+  ),
+  _DemoMealSpec(
+    player: 5,
+    hour: 14,
+    minute: 5,
+    source: 'helloasso',
+    status: 'planned',
+    meal: 9,
+    drink: 1,
+    snack: 4,
+    options: ['Allergie'],
+    note: 'HelloAsso : allergie fruits à coque',
+  ),
+  _DemoMealSpec(
+    player: 3,
+    hour: 14,
+    minute: 30,
+    source: 'helloasso',
+    status: 'cancelled',
+    meal: 10,
+    drink: 0,
+    formula: 'Boisson seule',
+    note: 'Absent',
+  ),
+];
+
 DemoDay _buildDay({
   required DateTime reference,
   required int dayOffset,
@@ -296,6 +487,7 @@ DemoDay _buildDay({
   required List<Article> articles,
   required List<Player> dayPlayers,
   required List<_DemoSaleSpec> specs,
+  required List<_DemoMealSpec> mealSpecs,
   required Map<String, int> cashStart,
   required Map<String, int> cashEnd,
 }) {
@@ -367,10 +559,70 @@ DemoDay _buildDay({
       cancellationReason: spec.cancelled ? 'Erreur de saisie' : '',
     ));
   }
+  final meals = <MealOrder>[];
+  for (final spec in mealSpecs) {
+    final player = dayPlayers[spec.player];
+    final createdAt = DateTime(
+        date.year, date.month, date.day, spec.hour, spec.minute);
+    final mealArticle = articles[spec.meal];
+    final saleId = spec.source == 'onsite' ? makeId('sale') : '';
+    final preparedAt = spec.status == 'prepared' || spec.status == 'served'
+        ? createdAt.add(const Duration(minutes: 15))
+        : null;
+    final servedAt = spec.status == 'served'
+        ? createdAt.add(const Duration(minutes: 25))
+        : null;
+    final meal = MealOrder(
+      id: makeId('meal'),
+      playerId: player.id,
+      playerName: player.name,
+      playerType: player.type,
+      source: spec.source,
+      status: spec.status,
+      saleId: saleId,
+      payment: spec.source == 'onsite' ? spec.payment : '',
+      mealArticleId: mealArticle.id,
+      drinkArticleId: spec.drink >= 0 ? articles[spec.drink].id : '',
+      snackArticleId: spec.snack >= 0 ? articles[spec.snack].id : '',
+      formula: spec.formula,
+      options: List<String>.of(spec.options),
+      note: spec.note,
+      createdAt: createdAt,
+      preparedAt: preparedAt,
+      servedAt: servedAt,
+      updatedAt: servedAt ?? preparedAt ?? createdAt,
+    );
+    if (meal.consumesStock) {
+      for (final entry in meal.stockItems.entries) {
+        final article =
+            articles.where((item) => item.id == entry.key).first;
+        final before = article.stock;
+        article.stock = before - entry.value;
+        movements.add(StockMovement(
+          id: makeId('movement'),
+          sessionId: session.id,
+          articleId: article.id,
+          saleId: saleId.isEmpty ? null : saleId,
+          movementType: 'meal',
+          quantityDelta: -entry.value,
+          stockBefore: before,
+          stockAfter: article.stock,
+          reason: 'Repas ${meal.id}',
+          createdAt: preparedAt ?? createdAt,
+        ));
+      }
+    }
+    if (meal.isOnsite) {
+      sales.add(_mealService.saleForMeal(meal, player, articles,
+          sessionId: session.id, createdAt: createdAt));
+    }
+    meals.add(meal);
+  }
   return DemoDay(
     session: session,
     players: dayPlayers,
     sales: sales,
+    meals: meals,
     cashStart: cashStart,
     cashEnd: cashEnd,
     stockMovements: movements,

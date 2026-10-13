@@ -1394,13 +1394,24 @@ void main() {
     expect(dataset.players, hasLength(10));
     expect(dataset.articles, isNotEmpty);
     expect(dataset.categories, contains('BOISSONS'));
+    expect(dataset.categories, contains('REPAS'));
+    expect(dataset.articles.any((article) => article.category == 'REPAS'),
+        isTrue);
 
     for (final day in dataset.days) {
       expect(day.sales, isNotEmpty);
+      expect(day.meals, isNotEmpty);
       expect(day.players, isNotEmpty);
       expect(day.cashStart, isNotEmpty);
       expect(day.cashEnd, isNotEmpty);
       expect(day.stockMovements, isNotEmpty);
+      for (final meal in day.meals.where((meal) => meal.consumesStock)) {
+        expect(
+            day.stockMovements.any((movement) =>
+                movement.movementType == 'meal' &&
+                movement.reason == 'Repas ${meal.id}'),
+            isTrue);
+      }
     }
 
     expect(dataset.days.first.session.eventDate, DateTime(2026, 7, 16));
@@ -1413,6 +1424,18 @@ void main() {
     expect(sales.any((sale) => sale.donation > 0), isTrue);
     expect(sales.any((sale) => sale.tariff == 'membre'), isTrue);
     expect(sales.any((sale) => sale.tariff == 'public'), isTrue);
+
+    final meals = dataset.days.expand((day) => day.meals).toList();
+    expect(meals.any((meal) => meal.source == 'helloasso'), isTrue);
+    expect(meals.any((meal) => meal.source == 'onsite'), isTrue);
+    expect(meals.any((meal) => meal.status == 'planned'), isTrue);
+    expect(meals.any((meal) => meal.status == 'prepared'), isTrue);
+    expect(meals.any((meal) => meal.status == 'served'), isTrue);
+    expect(meals.any((meal) => meal.status == 'cancelled'), isTrue);
+    for (final meal in meals.where((meal) => meal.isOnsite)) {
+      expect(meal.saleId, isNotEmpty);
+      expect(sales.any((sale) => sale.id == meal.saleId), isTrue);
+    }
   });
 
   test('dev license override maps build values to license states', () {
@@ -2352,6 +2375,93 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(controller.articleCategories, contains('PATCH CATÉGORIE'));
+    expect(tester.takeException(), isNull);
+  });
+
+  test('REPAS category visibility follows the meals module', () {
+    final controller = _MemoryAppController();
+
+    expect(controller.managedArticleCategories, contains('REPAS'));
+    expect(controller.isProtectedArticleCategory('REPAS'), isTrue);
+    expect(controller.isProtectedArticleCategory('repas'), isTrue);
+
+    controller.appSettings =
+        controller.appSettings.copyWith(mealsEnabled: false);
+
+    expect(controller.managedArticleCategories, isNot(contains('REPAS')));
+    expect(controller.managedArticleCategories, contains('BOISSONS'));
+  });
+
+  test('REPAS category cannot be renamed from the controller', () async {
+    final controller = _MemoryAppController();
+
+    await controller.renameArticleCategory('REPAS', 'MENU');
+    await controller.renameArticleCategory('BOISSONS', 'REPAS');
+
+    expect(controller.articleCategories, contains('REPAS'));
+    expect(controller.articleCategories, isNot(contains('MENU')));
+    expect(controller.articleCategories, contains('BOISSONS'));
+  });
+
+  testWidgets('REPAS category is locked in Articles & Prix', (tester) async {
+    final controller = _MemoryAppController();
+
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: caisseTheme(AppColors.accent),
+        home: Scaffold(body: ArticlesPricePage(controller: controller)),
+      ),
+    );
+
+    expect(find.text('REPAS'), findsWidgets);
+    expect(find.byIcon(Icons.lock_outline), findsOneWidget);
+
+    await tester.tap(find.byIcon(Icons.lock_outline));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Modifier catégorie'), findsNothing);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('REPAS hidden from Articles & Prix when meals disabled',
+      (tester) async {
+    final controller = _MemoryAppController();
+    controller.appSettings =
+        controller.appSettings.copyWith(mealsEnabled: false);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: caisseTheme(AppColors.accent),
+        home: Scaffold(body: ArticlesPricePage(controller: controller)),
+      ),
+    );
+
+    expect(find.text('REPAS'), findsNothing);
+    expect(find.byIcon(Icons.lock_outline), findsNothing);
+    expect(find.text('BOISSONS'), findsWidgets);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('article dialog hides REPAS when meals disabled',
+      (tester) async {
+    final controller = _MemoryAppController();
+    controller.appSettings =
+        controller.appSettings.copyWith(mealsEnabled: false);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: caisseTheme(AppColors.accent),
+        home: Scaffold(body: ArticlesPricePage(controller: controller)),
+      ),
+    );
+
+    await tester.tap(find.widgetWithText(OutlinedButton, 'Ajouter').last);
+    await tester.pumpAndSettle();
+    await tester.tap(find.byType(DropdownButtonFormField<String>).first);
+    await tester.pumpAndSettle();
+
+    expect(find.text('REPAS'), findsNothing);
+    expect(find.text('BOISSONS'), findsWidgets);
     expect(tester.takeException(), isNull);
   });
 

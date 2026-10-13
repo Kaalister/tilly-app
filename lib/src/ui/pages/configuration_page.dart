@@ -29,7 +29,7 @@ class ArticlesPricePage extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final categories = controller.allArticleCategories;
+    final categories = controller.managedArticleCategories;
     return ListView(
       padding: const EdgeInsets.all(12),
       children: [
@@ -48,12 +48,22 @@ class ArticlesPricePage extends StatelessWidget {
               runSpacing: 8,
               children: [
                 for (final category in categories)
-                  ActionChip(
-                    avatar: const Icon(Icons.edit, size: 16),
-                    label: Text(category),
-                    onPressed: () => showCategoryDialog(context, controller,
-                        category: category),
-                  ),
+                  if (controller.isProtectedArticleCategory(category))
+                    Tooltip(
+                      message:
+                          'Catégorie du module Repas, non modifiable et non supprimable',
+                      child: Chip(
+                        avatar: const Icon(Icons.lock_outline, size: 16),
+                        label: Text(category),
+                      ),
+                    )
+                  else
+                    ActionChip(
+                      avatar: const Icon(Icons.edit, size: 16),
+                      label: Text(category),
+                      onPressed: () => showCategoryDialog(context, controller,
+                          category: category),
+                    ),
               ],
             ),
           ),

@@ -104,6 +104,10 @@ class AppController extends ChangeNotifier implements PersistableAppState {
 List<String> get activeArticleCategories => articleCategories
       .where((category) => category != 'REPAS')
       .toList();
+  List<String> get managedArticleCategories =>
+      mealsEnabled ? articleCategories : activeArticleCategories;
+  bool isProtectedArticleCategory(String category) =>
+      normalizedCategoryName(category) == 'REPAS';
 List<String> get categories => ['TOUS', ...activeArticleCategories];
 List<String> get mealCategories => ['REPAS'];
 List<String> get allArticleCategories => articleCategories;
@@ -236,6 +240,7 @@ List<String> get allArticleCategories => articleCategories;
       activeSession = day.session;
       players = day.players;
       sales = day.sales;
+      meals = day.meals;
       cashStart = day.cashStart;
       cashEnd = day.cashEnd;
       pendingStockMovements.addAll(day.stockMovements);
@@ -1255,6 +1260,8 @@ List<String> get allArticleCategories => articleCategories;
   Future<void> renameArticleCategory(String previous, String category) async {
     final normalized = normalizedCategoryName(category);
     if (normalized.isEmpty ||
+        isProtectedArticleCategory(previous) ||
+        isProtectedArticleCategory(normalized) ||
         containsArticleCategory(normalized, except: previous)) {
       return;
     }

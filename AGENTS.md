@@ -60,7 +60,7 @@ Implemented the Tilly license client (Flutter multi-platform cash register app) 
 - Priorite : `--dart-define=APP_VERSION` > version du binaire (Android `versionName`, macOS `CFBundleShortVersionString`, Windows) > repli `1.0.0`.
 - Le controle de MAJ est actif en release, ou en debug avec `DEV_UPDATE_CHECK=true` (`.env.dev` ou `--dart-define=DEV_UPDATE_CHECK=true`).
 - `--dart-define=DEV_LICENSE=valid|none|grace|server|blocked|expired` (debug uniquement, ignore en release) force l'etat de licence sans reseau ni stockage ; l'enveloppe locale reste lue pour conserver le scope de donnees.
-- `--dart-define=DEV_DEMO_DATA=true` (debug uniquement) : au premier lancement, remplit une base vide (ou sans activite) avec 3 journees de demonstration (10 participants, 21 ventes, stocks, comptages). Ne s'applique jamais si des ventes/participants existent.
+- `--dart-define=DEV_DEMO_DATA=true` (debug uniquement) : au premier lancement, remplit une base vide (ou sans activite) avec 3 journees de demonstration (10 participants, 24 ventes, repas HelloAsso/sur place, stocks, comptages). Ne s'applique jamais si des ventes/participants existent.
 - `--dart-define=DEV_TUTORIAL=on|off` (debug uniquement) : force le tuto (on) ou le desactive (off).
 - Android : `build.gradle` utilise le dernier tag git comme `versionName`/`versionCode` quand aucun `--build-name` n'est fourni (Android Studio inclus).
 - Les builds release doivent passer `--build-name` **et** `--dart-define=APP_VERSION` : Dockerfile VPS, workflows macOS et Windows.
