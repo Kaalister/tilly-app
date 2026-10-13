@@ -71,6 +71,22 @@ TikoTutorialContent tikoFirebaseHelpTutorial() => const TikoTutorialContent(
       ],
     );
 
+TikoTutorialContent tikoPaypalHelpTutorial() => const TikoTutorialContent(
+      title: 'PayPal',
+      asset: _tikoTipAsset,
+      expressionAssets: [
+        _tikoTipAsset,
+        _tikoSuccessAsset,
+        _tikoThinkingAsset,
+      ],
+      messages: [
+        'Avec PayPal, tu proposes un QR code à scanner : il redirige directement sur ton compte PayPal et pré-remplit le montant à payer. Tu gagnes du temps à l\'encaissement.',
+        'Tu peux utiliser le bouton PayPal sans configuration : dans ce cas, il enregistre simplement la vente en PayPal.',
+        'Pour trouver ton pseudo : connecte-toi sur paypal.fr, ouvre les paramètres du compte puis « Profil PayPal.Me ». Ton pseudo est la fin de ton lien, par exemple paypal.me/tillyorceus.',
+        'Saisis ce pseudo dans Configurer puis appuie sur Vérifier : Tilly confirme que le compte existe avant d\'enregistrer. Aucun identifiant PayPal n\'est conservé.',
+      ],
+    );
+
 TikoTutorialContent tikoHelloAssoHelpTutorial({bool mealsEnabled = true}) =>
     TikoTutorialContent(
       title: 'HelloAsso',

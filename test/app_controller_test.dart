@@ -673,6 +673,14 @@ void main() {
       expect(controller.associationName, 'TILLY');
     });
 
+    test('setPaypalMeLink normalizes and clears the link', () async {
+      await controller.setPaypalMeLink('paypal.me/fragaddict');
+      expect(controller.paypalMeLink, 'https://paypal.me/fragaddict');
+      await controller.setPaypalMeLink('  ');
+      expect(controller.paypalMeLink, isEmpty);
+      expect(controller.persistCalls, greaterThan(0));
+    });
+
     test('setMainTabVisible ignores non configurable tabs', () async {
       await controller.setMainTabVisible(AppTabIds.sales, false);
       expect(controller.isMainTabVisible(AppTabIds.sales), isTrue);

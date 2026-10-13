@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_colorpicker/flutter_colorpicker.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:path/path.dart' as path;
+import 'package:qr_flutter/qr_flutter.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
 import 'package:crypto/crypto.dart' as crypto;
@@ -59,6 +60,27 @@ class _MemoryAppController extends AppController {
   @override
   Future<void> setMealsEnabled(bool enabled) async {
     appSettings = appSettings.copyWith(mealsEnabled: enabled);
+    notifyListeners();
+  }
+
+  @override
+  Future<void> setPaypalMeLink(String value) async {
+    appSettings = appSettings.copyWith(paypalMeLink: paypalMeLinkFrom(value));
+    notifyListeners();
+  }
+
+  bool? paypalLinkExists = true;
+
+  @override
+  Future<bool?> verifyPaypalMeLink(String value) async => paypalLinkExists;
+
+  String? lastCheckoutPayment;
+
+  @override
+  Future<void> checkout(String payment) async {
+    lastCheckoutPayment = payment;
+    cart.clear();
+    donation = 0;
     notifyListeners();
   }
 
@@ -2144,10 +2166,31 @@ void main() {
       ),
     );
 
-    await tester.tap(find.text('Synchronisation'));
+    await tester.tap(find.text('Comptes & services'));
     await tester.pumpAndSettle();
 
-    expect(find.text('À quoi ça sert ?'), findsOneWidget);
+    final accountsList = find
+        .descendant(of: find.byType(ConfigPage), matching: find.byType(ListView))
+        .first;
+    final accountsScrollable = find
+        .descendant(of: accountsList, matching: find.byType(Scrollable))
+        .first;
+
+    await tester.scrollUntilVisible(
+        find.byTooltip('Tiko explique HelloAsso'), 300,
+        scrollable: accountsScrollable);
+    await tester.pumpAndSettle();
+    await tester.tap(find.byTooltip('Tiko explique HelloAsso'));
+    await tester.pumpAndSettle();
+
+    expect(find.textContaining('HelloAsso est facultatif'), findsOneWidget);
+    await tester.tap(find.byTooltip('Fermer le tuto'));
+    await tester.pumpAndSettle();
+
+    await tester.scrollUntilVisible(
+        find.byTooltip('Tiko explique Firebase'), 300,
+        scrollable: accountsScrollable);
+    await tester.pumpAndSettle();
     await tester.tap(find.byTooltip('Tiko explique Firebase'));
     await tester.pumpAndSettle();
 
@@ -2170,13 +2213,6 @@ void main() {
 
     await tester.tap(find.byTooltip('Fermer le tuto'));
     await tester.pumpAndSettle();
-    await tester.tap(find.text('HelloAsso'));
-    await tester.pumpAndSettle();
-    expect(find.text('À quoi ça sert ?'), findsOneWidget);
-    await tester.tap(find.byTooltip('Tiko explique HelloAsso'));
-    await tester.pumpAndSettle();
-
-    expect(find.textContaining('HelloAsso est facultatif'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
 
@@ -2716,6 +2752,294 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
+  testWidgets('paypal checkout shows the QR dialog when configured',
+      (tester) async {
+    final controller = _MemoryAppController();
+    controller.appSettings = controller.appSettings
+        .copyWith(paypalMeLink: 'https://paypal.me/fragaddict');
+    controller.players = [testPlayer(name: 'Alice Dupont')];
+    controller.articles = [
+      testArticle(id: 'boisson', name: 'Soda maison', stock: 10),
+    ];
+    controller.selectPlayer(controller.players.first);
+    controller.addToCart(controller.articles.first);
+    tester.view.physicalSize = const Size(1200, 1000);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: caisseTheme(AppColors.accent),
+        home: Scaffold(body: CaissePage(controller: controller)),
+      ),
+    );
+
+    await tester.tap(find.widgetWithText(FilledButton, 'PayPal'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Paiement PayPal'), findsOneWidget);
+    expect(find.byType(QrImageView), findsOneWidget);
+    expect(find.text('https://paypal.me/fragaddict/2.00'), findsOneWidget);
+    expect(find.textContaining('le montant de 2,00 € est prérempli'),
+        findsOneWidget);
+    expect(find.text('Paiement reçu'), findsOneWidget);
+
+    await tester.tap(find.text('Paiement reçu'));
+    await tester.pumpAndSettle();
+
+    expect(controller.lastCheckoutPayment, 'PayPal');
+    expect(find.text('Paiement PayPal'), findsNothing);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('paypal checkout skips the QR dialog without a configured link',
+      (tester) async {
+    final controller = _MemoryAppController();
+    controller.players = [testPlayer(name: 'Alice Dupont')];
+    controller.articles = [
+      testArticle(id: 'boisson', name: 'Soda maison', stock: 10),
+    ];
+    controller.selectPlayer(controller.players.first);
+    controller.addToCart(controller.articles.first);
+    tester.view.physicalSize = const Size(1200, 1000);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: caisseTheme(AppColors.accent),
+        home: Scaffold(body: CaissePage(controller: controller)),
+      ),
+    );
+
+    await tester.tap(find.widgetWithText(FilledButton, 'PayPal'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Paiement PayPal'), findsNothing);
+    expect(controller.lastCheckoutPayment, 'PayPal');
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('config saves the validated PayPal.Me link',
+      (tester) async {
+    final controller = _MemoryAppController()
+      ..tutorialWelcomeSeen = true
+      ..tutorialPagesSeen = {...AppTabIds.all};
+    tester.view.physicalSize = const Size(1200, 700);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: caisseTheme(AppColors.accent),
+        home: RootShell(
+          controller: controller,
+          licenseService: _MockLicenseService(),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.descendant(
+      of: find.byType(NavigationRail),
+      matching: find.text('Config'),
+    ));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('Comptes & services'));
+    await tester.pumpAndSettle();
+
+    final configList = find
+        .descendant(of: find.byType(ConfigPage), matching: find.byType(ListView))
+        .first;
+    final configScrollable = find
+        .descendant(of: configList, matching: find.byType(Scrollable))
+        .first;
+    await tester.scrollUntilVisible(
+        find.widgetWithIcon(OutlinedButton, Icons.qr_code), 300,
+        scrollable: configScrollable);
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.widgetWithIcon(OutlinedButton, Icons.qr_code));
+    await tester.pumpAndSettle();
+    expect(find.text('Pseudo ou lien'), findsOneWidget);
+
+    await tester.enterText(find.byType(TextField).last, 'fragaddict');
+    await tester.tap(find.text('Vérifier'));
+    await tester.pumpAndSettle();
+    expect(find.text('Lien vérifié : le compte PayPal existe'), findsOneWidget);
+
+    await tester.tap(find.text('Valider'));
+    await tester.pumpAndSettle();
+
+    expect(controller.paypalMeLink, 'https://paypal.me/fragaddict');
+    expect(find.textContaining('https://paypal.me/fragaddict'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('paypal link validation blocks an unknown account',
+      (tester) async {
+    final controller = _MemoryAppController()..paypalLinkExists = false;
+    tester.view.physicalSize = const Size(1200, 900);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: caisseTheme(AppColors.accent),
+        home: Scaffold(
+          body: ConfigPage(
+            controller: controller,
+            licenseService: _MockLicenseService(),
+            updateResult: null,
+            checkingUpdate: false,
+            onCheckUpdate: () {},
+          ),
+        ),
+      ),
+    );
+
+    await tester.tap(find.text('Comptes & services'));
+    await tester.pumpAndSettle();
+
+    final configList = find
+        .descendant(of: find.byType(ConfigPage), matching: find.byType(ListView))
+        .first;
+    final configScrollable = find
+        .descendant(of: configList, matching: find.byType(Scrollable))
+        .first;
+    await tester.scrollUntilVisible(
+        find.widgetWithIcon(OutlinedButton, Icons.qr_code), 300,
+        scrollable: configScrollable);
+    await tester.pumpAndSettle();
+    await tester.tap(find.widgetWithIcon(OutlinedButton, Icons.qr_code));
+    await tester.pumpAndSettle();
+
+    await tester.enterText(find.byType(TextField).last, 'inconnu123');
+    await tester.tap(find.text('Valider'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Aucun compte PayPal.Me trouvé pour ce lien'),
+        findsOneWidget);
+    expect(controller.paypalMeLink, isEmpty);
+
+    controller.paypalLinkExists = true;
+    await tester.tap(find.text('Vérifier'));
+    await tester.pumpAndSettle();
+    expect(find.text('Lien vérifié : le compte PayPal existe'), findsOneWidget);
+
+    await tester.tap(find.text('Valider'));
+    await tester.pumpAndSettle();
+    expect(controller.paypalMeLink, 'https://paypal.me/inconnu123');
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('paypal section swaps configurer for deconnecter', (tester) async {
+    final controller = _MemoryAppController()
+      ..tutorialWelcomeSeen = true
+      ..tutorialPagesSeen = {...AppTabIds.all};
+    controller.appSettings = controller.appSettings
+        .copyWith(paypalMeLink: 'https://paypal.me/tillyorceus');
+    tester.view.physicalSize = const Size(1200, 900);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: caisseTheme(AppColors.accent),
+        home: RootShell(
+          controller: controller,
+          licenseService: _MockLicenseService(),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.descendant(
+      of: find.byType(NavigationRail),
+      matching: find.text('Config'),
+    ));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('Comptes & services'));
+    await tester.pumpAndSettle();
+
+    final configList = find
+        .descendant(of: find.byType(ConfigPage), matching: find.byType(ListView))
+        .first;
+    final configScrollable = find
+        .descendant(of: configList, matching: find.byType(Scrollable))
+        .first;
+    await tester.scrollUntilVisible(find.text('Déconnecter'), 300,
+        scrollable: configScrollable);
+    await tester.pumpAndSettle();
+
+    expect(find.text('Déconnecter'), findsOneWidget);
+    expect(find.widgetWithIcon(OutlinedButton, Icons.qr_code), findsNothing);
+
+    await tester.tap(find.text('Déconnecter'));
+    await tester.pumpAndSettle();
+
+    expect(controller.paypalMeLink, isEmpty);
+    expect(find.widgetWithIcon(OutlinedButton, Icons.qr_code), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('paypal help explains how to find the handle', (tester) async {
+    final controller = _MemoryAppController();
+    tester.view.physicalSize = const Size(1200, 900);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: caisseTheme(AppColors.accent),
+        home: Scaffold(
+          body: ConfigPage(
+            controller: controller,
+            licenseService: _MockLicenseService(),
+            updateResult: null,
+            checkingUpdate: false,
+            onCheckUpdate: () {},
+          ),
+        ),
+      ),
+    );
+
+    await tester.tap(find.text('Comptes & services'));
+    await tester.pumpAndSettle();
+
+    final configList = find
+        .descendant(of: find.byType(ConfigPage), matching: find.byType(ListView))
+        .first;
+    final configScrollable = find
+        .descendant(of: configList, matching: find.byType(Scrollable))
+        .first;
+    await tester.scrollUntilVisible(
+        find.byTooltip('Tiko explique PayPal'), 300,
+        scrollable: configScrollable);
+    await tester.pumpAndSettle();
+    await tester.tap(find.byTooltip('Tiko explique PayPal'));
+    await tester.pumpAndSettle();
+
+    expect(find.textContaining('pré-remplit le montant'), findsOneWidget);
+    await tester.tap(find.text('Suivant'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Suivant'));
+    await tester.pumpAndSettle();
+    expect(find.textContaining('Profil PayPal.Me'), findsOneWidget);
+    await tester.tap(find.text('Suivant'));
+    await tester.pumpAndSettle();
+    expect(find.text('Ouvrir PayPal'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('root shell shows the meals tab when the module is enabled',
       (tester) async {
     final controller = _MemoryAppController()
@@ -3181,10 +3505,12 @@ testWidgets('player dialog adds participant without email', (tester) async {
       ),
     );
 
-    await tester.tap(find.text('Compte'));
+    await tester.tap(find.text('Comptes & services'));
     await tester.pumpAndSettle();
 
-    expect(find.text('contact@tilly.orceus.fr'), findsOneWidget);
+    expect(find.textContaining('contact@tilly.orceus.fr'), findsOneWidget);
+    expect(find.text('Licence de l’application activée'), findsOneWidget);
+    expect(find.text('SERVICES CONNECTÉS'), findsOneWidget);
 
     await tester.tap(find.text('Se déconnecter'));
     await tester.pumpAndSettle();

@@ -177,7 +177,7 @@ class _ConfigPageState extends State<ConfigPage>
   @override
   void initState() {
     super.initState();
-    _tabController = TabController(length: 8, vsync: this);
+    _tabController = TabController(length: 6, vsync: this);
   }
 
   @override
@@ -219,23 +219,15 @@ class _ConfigPageState extends State<ConfigPage>
                 ),
                 Tab(
                   child: _ConfigTabLabel(
+                      icon: Icons.manage_accounts, title: 'Comptes & services'),
+                ),
+                Tab(
+                  child: _ConfigTabLabel(
                       icon: Icons.system_update, title: 'Mises à jour'),
-                ),
-                Tab(
-                  child: _ConfigTabLabel(
-                      icon: Icons.cloud_sync, title: 'Synchronisation'),
-                ),
-                Tab(
-                  child: _ConfigTabLabel(
-                      icon: Icons.event_available, title: 'HelloAsso'),
                 ),
                 Tab(
                   child:
                       _ConfigTabLabel(icon: Icons.backup, title: 'Sauvegarde'),
-                ),
-                Tab(
-                  child: _ConfigTabLabel(
-                      icon: Icons.account_circle, title: 'Compte'),
                 ),
                 Tab(
                   child: _ConfigTabLabel(
@@ -255,17 +247,11 @@ class _ConfigPageState extends State<ConfigPage>
             controller: _tabController,
             children: [
               _ConfigTabBody(children: _buildPersonalizationSections(context)),
+              _ConfigTabBody(children: _buildAccountsSections(context)),
               _ConfigTabBody(
                 children: [
                   const SectionTitle('Mises à jour'),
                   _buildUpdateSection(context),
-                ],
-              ),
-              _ConfigTabBody(children: _buildFirebaseSections(context)),
-              _ConfigTabBody(
-                children: [
-                  const SectionTitle('HelloAsso'),
-                  _buildHelloAssoSection(context),
                 ],
               ),
               _ConfigTabBody(
@@ -276,7 +262,6 @@ class _ConfigPageState extends State<ConfigPage>
                   _buildRestoreSection(context),
                 ],
               ),
-              _ConfigTabBody(children: _buildAccountSections(context)),
               _ConfigTabBody(children: _buildResetSections(context)),
               _ConfigTabBody(children: _buildAboutSections()),
             ],
@@ -434,6 +419,57 @@ class _ConfigPageState extends State<ConfigPage>
     ];
   }
 
+  List<Widget> _buildAccountsSections(BuildContext context) {
+    return [
+      const SectionTitle('Comptes & services'),
+      ..._buildTillyAccountSections(context),
+      const SizedBox(height: 14),
+      const SectionTitle('Services connectés'),
+      ..._buildPaypalSections(context),
+      const SizedBox(height: 10),
+      _buildHelloAssoSection(context),
+      const SizedBox(height: 10),
+      ..._buildFirebaseSections(context),
+    ];
+  }
+
+  List<Widget> _buildPaypalSections(BuildContext context) {
+    final configured = controller.paypalMeLink.isNotEmpty;
+    return [
+      ConfigActionZone(
+        borderColor: configured ? AppColors.accent : AppColors.warn,
+        leading: Icon(Icons.qr_code_2,
+            color: configured ? AppColors.accent : AppColors.warn),
+        title: configured ? 'PayPal configuré' : 'PayPal non configuré',
+        description: configured
+            ? '${controller.paypalMeLink}\nAu paiement, le QR code redirige directement vers ce compte PayPal avec le montant pré-rempli.'
+            : 'Renseigne ton pseudo PayPal.Me pour proposer au paiement un QR code qui redirige directement vers ton compte avec le montant pré-rempli. Sans configuration, le bouton PayPal enregistre simplement la vente.',
+        action: Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          children: [
+            if (configured)
+              OutlinedButton.icon(
+                onPressed: () => controller.setPaypalMeLink(''),
+                icon: const Icon(Icons.logout),
+                label: const Text('Déconnecter'),
+              )
+            else
+              OutlinedButton.icon(
+                onPressed: () => _editPaypalLink(context),
+                icon: const Icon(Icons.qr_code),
+                label: const Text('Configurer'),
+              ),
+            TikoHelpButton(
+              tooltip: 'Tiko explique PayPal',
+              onPressed: () => showPaypalHelpDialog(context),
+            ),
+          ],
+        ),
+      ),
+    ];
+  }
+
   Future<void> _editPrimaryColor(BuildContext context) async {
     final value = await showDialog<Color>(
       context: context,
@@ -476,6 +512,20 @@ class _ConfigPageState extends State<ConfigPage>
       if (!context.mounted) return;
       await controller.setAssociationName(value);
     }
+  }
+
+  Future<void> _editPaypalLink(BuildContext context) async {
+    final value = await showDialog<String>(
+      context: context,
+      builder: (context) => _PaypalLinkDialog(
+        controller: controller,
+        initialValue: controller.paypalMeLink,
+      ),
+    );
+    if (value == null) return;
+    await Future<void>.delayed(kThemeAnimationDuration);
+    if (!context.mounted) return;
+    await controller.setPaypalMeLink(value);
   }
 
   Future<void> _pickAppIcon(BuildContext context) async {
@@ -539,21 +589,22 @@ class _ConfigPageState extends State<ConfigPage>
   List<Widget> _buildFirebaseSections(BuildContext context) {
     final configured = controller.firebaseSettings.isConfigured;
     final connected = controller.firebaseAvailable;
+    final statusColor = connected
+        ? AppColors.accent
+        : configured
+            ? AppColors.accent2
+            : AppColors.warn;
     return [
-      const SectionTitle('Synchronisation'),
       ConfigActionZone(
-        borderColor: connected
-            ? AppColors.accent
-            : configured
-                ? AppColors.accent2
-                : AppColors.warn,
+        borderColor: statusColor,
+        leading: Icon(Icons.cloud_sync, color: statusColor),
         title: connected
-            ? 'Synchronisation active'
+            ? 'Firebase synchronisé'
             : FirebaseBootstrap.initialized
-                ? 'Connexion du compte requise'
+                ? 'Connexion du compte Firebase requise'
                 : configured
-                    ? 'Configuration à corriger'
-                    : 'Synchronisation désactivée',
+                    ? 'Configuration Firebase à corriger'
+                    : 'Firebase non configuré',
         description: connected
             ? '${controller.firebaseUserLabel} · Projet ${controller.firebaseSettings.projectId}${controller.lastSyncedAt == null ? '' : ' · ${dateLabel(controller.lastSyncedAt!)} ${timeLabel(controller.lastSyncedAt!)}'}'
             : FirebaseBootstrap.initialized
@@ -634,14 +685,13 @@ class _ConfigPageState extends State<ConfigPage>
   }
 
   Widget _buildHelloAssoSection(BuildContext context) {
+    final configured = controller.helloAssoSettings.isConfigured;
     return ConfigActionZone(
-      borderColor: controller.helloAssoSettings.isConfigured
-          ? AppColors.accent
-          : AppColors.warn,
-      title: controller.helloAssoSettings.isConfigured
-          ? 'Connexion configurée'
-          : 'Connexion non configurée',
-      description: controller.helloAssoSettings.isConfigured
+      borderColor: configured ? AppColors.accent : AppColors.warn,
+      leading: Icon(Icons.event_available,
+          color: configured ? AppColors.accent : AppColors.warn),
+      title: configured ? 'HelloAsso configuré' : 'HelloAsso non configuré',
+      description: configured
           ? '${controller.helloAssoSettings.organizationSlug} · ${controller.helloAssoSettings.environment == 'sandbox' ? 'Sandbox' : 'Production'}'
           : 'Renseigne les clés API pour importer les événements et les participants inscrits.',
       action: Wrap(
@@ -782,44 +832,24 @@ class _ConfigPageState extends State<ConfigPage>
     ];
   }
 
-  List<Widget> _buildAccountSections(BuildContext context) {
+  List<Widget> _buildTillyAccountSections(BuildContext context) {
     final email = licenseService.userEmail;
     final connected = email != null && email.isNotEmpty;
     return [
-      const SectionTitle('Compte'),
-      ConfigSection(
-        title: 'Compte Tilly',
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            ListTile(
-              leading:
-                  Icon(Icons.account_circle, color: context.primaryAccent),
-              title: Text(
-                  connected ? email : 'Aucun compte connecté'),
-              subtitle: Text(licenseService.getStateMessage()),
-            ),
-            Padding(
-              padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
-              child: Align(
-                alignment: Alignment.centerLeft,
-                child: OutlinedButton.icon(
-                  onPressed: connected ? () => _logout(context) : null,
-                  icon: const Icon(Icons.logout),
-                  label: const Text('Se déconnecter'),
-                ),
-              ),
-            ),
-          ],
-        ),
-      ),
-      const SizedBox(height: 12),
-      const TacticalCard(
-        borderColor: AppColors.warn,
-        child: Text(
-          'Pour retirer cet appareil de votre compte, utilisez '
-          'tilly.orceus.fr.',
-          style: TextStyle(color: AppColors.muted, height: 1.4),
+      ConfigActionZone(
+        borderColor: connected ? AppColors.accent : AppColors.warn,
+        leading: Icon(Icons.verified_user,
+            color: connected ? AppColors.accent : AppColors.warn),
+        title: connected
+            ? 'Licence de l’application activée'
+            : 'Licence de l’application non activée',
+        description: connected
+            ? '$email · ${licenseService.getStateMessage()}\nCe compte active et vérifie la licence de Tilly sur cet appareil. Gestion des appareils sur tilly.orceus.fr'
+            : '${licenseService.getStateMessage()}\nConnecte-toi avec ton compte Tilly pour activer la licence de l’application. Gestion des appareils sur tilly.orceus.fr',
+        action: OutlinedButton.icon(
+          onPressed: connected ? () => _logout(context) : null,
+          icon: const Icon(Icons.logout),
+          label: const Text('Se déconnecter'),
         ),
       ),
     ];
@@ -1570,12 +1600,14 @@ class ConfigActionZone extends StatelessWidget {
       required this.title,
       required this.description,
       required this.action,
+      this.leading,
       super.key});
 
   final Color borderColor;
   final String title;
   final String description;
   final Widget action;
+  final Widget? leading;
 
   @override
   Widget build(BuildContext context) {
@@ -1595,6 +1627,36 @@ class ConfigActionZone extends StatelessWidget {
             descriptionText,
           ],
         );
+        final header = leading == null
+            ? textColumn
+            : Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  leading!,
+                  const SizedBox(width: 10),
+                  Expanded(child: textColumn),
+                ],
+              );
+        final body = compact
+            ? Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  header,
+                  const SizedBox(height: 10),
+                  Align(alignment: Alignment.centerLeft, child: action),
+                ],
+              )
+            : Row(
+                children: [
+                  Expanded(child: header),
+                  const SizedBox(width: 12),
+                  Flexible(
+                    flex: 0,
+                    child: Align(
+                        alignment: Alignment.centerRight, child: action),
+                  ),
+                ],
+              );
         return Container(
           padding: const EdgeInsets.all(12),
           decoration: BoxDecoration(
@@ -1602,28 +1664,164 @@ class ConfigActionZone extends StatelessWidget {
             border: Border.all(color: borderColor),
             borderRadius: BorderRadius.circular(10),
           ),
-          child: compact
-              ? Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    textColumn,
-                    const SizedBox(height: 10),
-                    Align(alignment: Alignment.centerLeft, child: action),
-                  ],
-                )
-              : Row(
-                  children: [
-                    Expanded(child: textColumn),
-                    const SizedBox(width: 12),
-                    Flexible(
-                      flex: 0,
-                      child: Align(
-                          alignment: Alignment.centerRight, child: action),
-                    ),
-                  ],
-                ),
+          child: body,
         );
       },
+    );
+  }
+}
+
+class _PaypalLinkDialog extends StatefulWidget {
+  const _PaypalLinkDialog({
+    required this.controller,
+    required this.initialValue,
+  });
+
+  final AppController controller;
+  final String initialValue;
+
+  @override
+  State<_PaypalLinkDialog> createState() => _PaypalLinkDialogState();
+}
+
+class _PaypalLinkDialogState extends State<_PaypalLinkDialog> {
+  late final TextEditingController field;
+  bool checking = false;
+  String? message;
+  bool messageIsError = false;
+
+  @override
+  void initState() {
+    super.initState();
+    field = TextEditingController(text: widget.initialValue);
+  }
+
+  @override
+  void dispose() {
+    field.dispose();
+    super.dispose();
+  }
+
+  void _setMessage(String? value, {bool error = false}) {
+    setState(() {
+      message = value;
+      messageIsError = error;
+    });
+  }
+
+  Future<void> _verify() async {
+    final raw = field.text.trim();
+    final link = paypalMeLinkFrom(raw);
+    if (raw.isEmpty) {
+      _setMessage('Saisis un pseudo ou un lien PayPal.Me', error: true);
+      return;
+    }
+    if (link.isEmpty) {
+      _setMessage('Lien PayPal.Me invalide', error: true);
+      return;
+    }
+    setState(() => checking = true);
+    final exists = await widget.controller.verifyPaypalMeLink(link);
+    if (!mounted) return;
+    setState(() => checking = false);
+    if (exists == true) {
+      _setMessage('Lien vérifié : le compte PayPal existe');
+    } else if (exists == false) {
+      _setMessage('Aucun compte PayPal.Me trouvé pour ce lien', error: true);
+    } else {
+      _setMessage('Vérification impossible (hors ligne ?)');
+    }
+  }
+
+  Future<void> _submit() async {
+    final raw = field.text.trim();
+    if (raw.isEmpty) {
+      Navigator.pop(context, '');
+      return;
+    }
+    final link = paypalMeLinkFrom(raw);
+    if (link.isEmpty) {
+      _setMessage('Lien PayPal.Me invalide', error: true);
+      return;
+    }
+    setState(() => checking = true);
+    final exists = await widget.controller.verifyPaypalMeLink(link);
+    if (!mounted) return;
+    setState(() => checking = false);
+    if (exists == false) {
+      _setMessage('Aucun compte PayPal.Me trouvé pour ce lien', error: true);
+      return;
+    }
+    Navigator.pop(context, link);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('Lien PayPal.Me'),
+      content: SizedBox(
+        width: 380,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            TextField(
+              controller: field,
+              autofocus: true,
+              decoration: const InputDecoration(
+                labelText: 'Pseudo ou lien',
+                helperText:
+                    'Pseudo = fin de ton lien. Ex. : paypal.me/tillyorceus → tillyorceus',
+              ),
+              textInputAction: TextInputAction.done,
+              onSubmitted: (_) => _submit(),
+            ),
+            if (message != null) ...[
+              const SizedBox(height: 8),
+              Text(
+                message!,
+                style: TextStyle(
+                    color: messageIsError
+                        ? AppColors.danger
+                        : AppColors.muted,
+                    fontWeight: FontWeight.w700),
+              ),
+            ],
+            const SizedBox(height: 8),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                OutlinedButton.icon(
+                  onPressed: checking ? null : _verify,
+                  icon: const Icon(Icons.fact_check_outlined),
+                  label: const Text('Vérifier'),
+                ),
+                TextButton.icon(
+                  onPressed:
+                      checking ? null : () => showPaypalHelpDialog(context),
+                  icon: const Icon(Icons.help_outline),
+                  label: const Text('Comment trouver ?'),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+            onPressed: checking ? null : () => Navigator.pop(context),
+            child: const Text('Annuler')),
+        FilledButton(
+          onPressed: checking ? null : _submit,
+          child: checking
+              ? const SizedBox.square(
+                  dimension: 18,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                )
+              : const Text('Valider'),
+        ),
+      ],
     );
   }
 }

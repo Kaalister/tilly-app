@@ -133,6 +133,7 @@ void main() {
         appIconPath: '/tmp/icon.png',
         primaryColorValue: 0xFF112233,
         mealsEnabled: false,
+        paypalMeLink: 'https://paypal.me/fragaddict',
         mainTabVisibility: {
           ..._defaultVisibility(),
           AppTabIds.meals: false,
@@ -143,6 +144,7 @@ void main() {
       expect(restored.appIconPath, '/tmp/icon.png');
       expect(restored.primaryColorValue, 0xFF112233);
       expect(restored.mealsEnabled, isFalse);
+      expect(restored.paypalMeLink, 'https://paypal.me/fragaddict');
       expect(restored.isMainTabVisible(AppTabIds.meals), isFalse);
     });
 
@@ -168,6 +170,37 @@ void main() {
           isFalse);
       expect(AppSettings.fromJson({'mealsEnabled': 0}).mealsEnabled, isTrue);
       expect(AppSettings.fromJson(const {}).mealsEnabled, isTrue);
+    });
+  });
+
+  group('paypalMeLinkFrom', () {
+    test('accepts a bare handle', () {
+      expect(paypalMeLinkFrom('fragaddict'), 'https://paypal.me/fragaddict');
+      expect(paypalMeLinkFrom('  FragAddict '),
+          'https://paypal.me/FragAddict');
+    });
+
+    test('normalizes pasted PayPal.Me and paypalme links', () {
+      expect(paypalMeLinkFrom('paypal.me/fragaddict'),
+          'https://paypal.me/fragaddict');
+      expect(paypalMeLinkFrom('https://paypal.me/fragaddict/'),
+          'https://paypal.me/fragaddict');
+      expect(paypalMeLinkFrom('https://www.paypal.com/paypalme/fragaddict'),
+          'https://paypal.me/fragaddict');
+      expect(paypalMeLinkFrom('https://paypal.me/fragaddict?locale=fr_FR'),
+          'https://paypal.me/fragaddict');
+    });
+
+    test('clears empty values', () {
+      expect(paypalMeLinkFrom(''), '');
+      expect(paypalMeLinkFrom('   '), '');
+    });
+
+    test('rejects invalid values', () {
+      expect(paypalMeLinkFrom('frag addict'), '');
+      expect(paypalMeLinkFrom('frag-addict'), '');
+      expect(paypalMeLinkFrom('https://example.com/fragaddict'), '');
+      expect(paypalMeLinkFrom('abcdefghijklmnopqrstuvwxyz'), '');
     });
   });
 

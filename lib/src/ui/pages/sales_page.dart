@@ -769,8 +769,11 @@ class CartPanel extends StatelessWidget {
         const SizedBox(width: 6),
         Expanded(
             child: FilledButton.tonal(
-                onPressed:
-                    canCheckout ? () => _checkout(context, 'PayPal') : null,
+                onPressed: canCheckout
+                    ? () => controller.paypalMeLink.isEmpty
+                        ? _checkout(context, 'PayPal')
+                        : showPaypalQrDialog(context, controller)
+                    : null,
                 child: const Text('PayPal'))),
         const SizedBox(width: 6),
         Expanded(

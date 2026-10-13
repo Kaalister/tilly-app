@@ -12,6 +12,7 @@ import '../services/demo_data_service.dart';
 import '../services/firebase_sync_service.dart';
 import '../services/hello_asso_import_service.dart';
 import '../services/meal_service.dart';
+import '../services/paypal_me_service.dart';
 import '../services/secure_settings_service.dart';
 import '../services/stock_service.dart';
 import '../services/tutorial_store.dart';
@@ -32,6 +33,7 @@ class AppController extends ChangeNotifier implements PersistableAppState {
   final TutorialStore _tutorialStore;
   final HelloAssoImportService _helloAssoImport = HelloAssoImportService();
   final MealService _mealService = MealService();
+  final PaypalMeService _paypalMe = PaypalMeService();
   final StockService _stockService = StockService();
 
   bool loading = true;
@@ -83,6 +85,7 @@ class AppController extends ChangeNotifier implements PersistableAppState {
   String get appIconPath => appSettings.appIconPath;
   Color get primaryColor => appSettings.primaryColor;
   bool get mealsEnabled => appSettings.mealsEnabled;
+  String get paypalMeLink => appSettings.paypalMeLink;
   String get firebaseUserLabel =>
       FirebaseBootstrap.currentUser?.email ??
       FirebaseBootstrap.currentUser?.uid ??
@@ -630,6 +633,18 @@ List<String> get allArticleCategories => articleCategories;
     if (!enabled && tab == 1) tab = 0;
     notifyListeners();
     await persist();
+  }
+
+  Future<void> setPaypalMeLink(String value) async {
+    appSettings = appSettings.copyWith(paypalMeLink: paypalMeLinkFrom(value));
+    notifyListeners();
+    await persist();
+  }
+
+  Future<bool?> verifyPaypalMeLink(String value) {
+    final link = paypalMeLinkFrom(value);
+    if (link.isEmpty) return Future.value(false);
+    return _paypalMe.linkExists(link);
   }
 
   Future<void> setSession(String value) async {

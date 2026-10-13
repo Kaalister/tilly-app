@@ -136,6 +136,7 @@ class AppSettings {
     this.appIconPath = '',
     this.primaryColorValue = 0xFFC8F135,
     this.mealsEnabled = true,
+    this.paypalMeLink = '',
     this.mainTabVisibility = _defaultMainTabVisibility,
   });
 
@@ -143,6 +144,7 @@ class AppSettings {
   final String appIconPath;
   final int primaryColorValue;
   final bool mealsEnabled;
+  final String paypalMeLink;
   final Map<String, bool> mainTabVisibility;
 
   bool isMainTabVisible(String id) => mainTabVisibility[id] ?? true;
@@ -153,6 +155,7 @@ class AppSettings {
     String? appIconPath,
     int? primaryColorValue,
     bool? mealsEnabled,
+    String? paypalMeLink,
     Map<String, bool>? mainTabVisibility,
   }) {
     return AppSettings(
@@ -160,6 +163,7 @@ class AppSettings {
       appIconPath: appIconPath ?? this.appIconPath,
       primaryColorValue: primaryColorValue ?? this.primaryColorValue,
       mealsEnabled: mealsEnabled ?? this.mealsEnabled,
+      paypalMeLink: paypalMeLink ?? this.paypalMeLink,
       mainTabVisibility: mainTabVisibility ?? this.mainTabVisibility,
     );
   }
@@ -169,6 +173,7 @@ class AppSettings {
         'appIconPath': appIconPath,
         'primaryColorValue': primaryColorValue,
         'mealsEnabled': mealsEnabled,
+        'paypalMeLink': paypalMeLink,
         'mainTabVisibility': mainTabVisibility,
       };
 
@@ -189,9 +194,26 @@ class AppSettings {
       primaryColorValue:
           parseColorValue(json['primaryColorValue']) ?? 0xFFC8F135,
       mealsEnabled: json['mealsEnabled'] != false,
+      paypalMeLink: paypalMeLinkFrom('${json['paypalMeLink'] ?? ''}'),
       mainTabVisibility: visibility,
     );
   }
+}
+
+/// Normalizes a PayPal.Me handle or link into `https://paypal.me/<handle>`.
+/// Returns an empty string when the value is not a valid PayPal.Me handle.
+String paypalMeLinkFrom(String value) {
+  final trimmed = value.trim();
+  if (trimmed.isEmpty) return '';
+  final match = RegExp(r'(?:paypal\.me|paypal\.com/paypalme)/([^/?#\s]+)',
+          caseSensitive: false)
+      .firstMatch(trimmed);
+  final handle = match?.group(1) ??
+      (trimmed.contains('://') || trimmed.toLowerCase().startsWith('www.')
+          ? ''
+          : trimmed);
+  if (!RegExp(r'^[A-Za-z0-9]{1,20}$').hasMatch(handle)) return '';
+  return 'https://paypal.me/$handle';
 }
 
 int? parseColorValue(Object? value) {

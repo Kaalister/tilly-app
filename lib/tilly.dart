@@ -17,6 +17,7 @@ export 'src/services/hello_asso_client.dart';
 export 'src/services/hello_asso_import_service.dart';
 export 'src/services/kpi_service.dart';
 export 'src/services/meal_service.dart';
+export 'src/services/paypal_me_service.dart';
 export 'src/services/secure_settings_service.dart';
 export 'src/services/stock_service.dart';
 export 'src/services/tutorial_store.dart';

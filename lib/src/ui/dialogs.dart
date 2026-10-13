@@ -3,6 +3,7 @@ import 'dart:math';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:qr_flutter/qr_flutter.dart';
 
 import '../config/app_config.dart';
 import '../controllers/app_controller.dart';
@@ -480,6 +481,25 @@ Future<void> showHelloAssoHelpDialog(BuildContext context,
   } catch (error) {
     if (context.mounted) {
       snack(context, 'Impossible d’ouvrir le tutoriel : $error');
+    }
+  }
+}
+
+Future<void> showPaypalHelpDialog(BuildContext context) async {
+  final openPaypal = await showDialog<bool>(
+    context: context,
+    builder: (context) => TikoTutorialDialog(
+      content: tikoPaypalHelpTutorial(),
+      primaryActionLabel: 'Ouvrir PayPal',
+    ),
+  );
+
+  if (openPaypal != true || !context.mounted) return;
+  try {
+    await openExternalUrl(paypalMeUrl);
+  } catch (error) {
+    if (context.mounted) {
+      snack(context, 'Impossible d’ouvrir PayPal : $error');
     }
   }
 }
@@ -1539,6 +1559,83 @@ class _CashDialogState extends State<_CashDialog> {
               : null,
           child: const Text('Valider ESP'),
         ),
+      ],
+    );
+  }
+}
+
+Future<void> showPaypalQrDialog(
+    BuildContext context, AppController controller) async {
+  final link = controller.paypalMeLink;
+  if (link.isEmpty) return;
+  final total = controller.cartTotal;
+  final qrData = total > 0 ? '$link/${total.toStringAsFixed(2)}' : link;
+  final validate = await showDialog<bool>(
+    context: context,
+    builder: (context) => _PaypalQrDialog(qrData: qrData, total: total),
+  );
+  if (validate != true) return;
+  await Future<void>.delayed(kThemeAnimationDuration);
+  if (!context.mounted) return;
+  try {
+    await controller.checkout('PayPal');
+    if (context.mounted) snack(context, 'Vente validée en PayPal');
+  } on StateError catch (error) {
+    if (context.mounted) snack(context, '$error');
+  }
+}
+
+class _PaypalQrDialog extends StatelessWidget {
+  const _PaypalQrDialog({required this.qrData, required this.total});
+
+  final String qrData;
+  final double total;
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('Paiement PayPal'),
+      content: SizedBox(
+        width: 340,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            MetricCard(
+                label: 'À payer', value: money(total), color: AppColors.accent),
+            const SizedBox(height: 12),
+            Center(
+              child: Container(
+                padding: const EdgeInsets.all(12),
+                color: Colors.white,
+                child: QrImageView(
+                  data: qrData,
+                  size: 220,
+                  backgroundColor: Colors.white,
+                ),
+              ),
+            ),
+            const SizedBox(height: 12),
+            Text(
+              'Le client scanne ce QR code avec son appareil photo ou l’app PayPal : le montant de ${money(total)} est prérempli, il peut le modifier.',
+              textAlign: TextAlign.center,
+              style: const TextStyle(color: AppColors.muted),
+            ),
+            const SizedBox(height: 6),
+            Text(qrData,
+                textAlign: TextAlign.center,
+                style:
+                    const TextStyle(color: AppColors.muted, fontSize: 12)),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Annuler')),
+        FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Paiement reçu')),
       ],
     );
   }

@@ -82,6 +82,7 @@ String tutorialOverrideFor(String value) {
 }
 const firebaseSetupGuideUrl = 'https://tilly.orceus.fr/tutoriels/firebase';
 const helloAssoSetupGuideUrl = 'https://tilly.orceus.fr/tutoriels/helloasso';
+const paypalMeUrl = 'https://www.paypal.com/paypalme';
 
 const _defaultLicenseApiBaseUrl = kReleaseMode
     ? 'https://tilly.orceus.fr'
