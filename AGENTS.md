@@ -194,7 +194,7 @@ Implemented the Tilly license client (Flutter multi-platform cash register app) 
 6. **Tutorial state is device-level** - `TutorialStore` (shared_preferences), independent from the per-account DB; legacy `tutorial_*` rows are deleted by the SQLite v10 migration. No migration to the store (app not in production)
 
 ## Current Status
-- ✅ All 41 tests pass
+- ✅ All 290 tests pass (10 fichiers : widget_test.dart + models, stock, repas, KPI, contrôleur, persistance, HelloAsso, licence)
 - ✅ `flutter analyze --no-fatal-infos` clean (only minor warnings)
 - ✅ License client fully integrated and gated in RootShell
 - ✅ ActivationPage + LicenseBanner working

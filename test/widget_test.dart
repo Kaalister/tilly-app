@@ -24,6 +24,8 @@ import 'package:tilly/src/services/license/machine_id.dart';
 import 'package:tilly/src/ui/pages/activation_page.dart';
 import 'package:tilly/src/ui/pages/license_blocked_page.dart';
 
+import 'support/test_doubles.dart';
+
 class _MemoryAppController extends AppController {
   _MemoryAppController() {
     loading = false;
@@ -51,6 +53,12 @@ class _MemoryAppController extends AppController {
     final visibility = <String, bool>{...appSettings.mainTabVisibility};
     visibility[id] = visible;
     appSettings = appSettings.copyWith(mainTabVisibility: visibility);
+    notifyListeners();
+  }
+
+  @override
+  Future<void> setMealsEnabled(bool enabled) async {
+    appSettings = appSettings.copyWith(mealsEnabled: enabled);
     notifyListeners();
   }
 
@@ -2462,6 +2470,256 @@ void main() {
 
     expect(find.text('REPAS'), findsNothing);
     expect(find.text('BOISSONS'), findsWidgets);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('meals page lists meals with statuses and counters',
+      (tester) async {
+    final controller = _MemoryAppController();
+    controller.articles = [
+      testArticle(
+          id: 'repas-1', category: 'REPAS', name: 'Repas', threshold: 2),
+      testArticle(id: 'drink-1', name: 'Soda'),
+    ];
+    controller.meals = [
+      testMeal(
+          id: 'm1',
+          playerName: 'Alice Martin',
+          status: 'planned',
+          mealArticleId: 'repas-1',
+          drinkArticleId: 'drink-1'),
+      testMeal(
+          id: 'm2',
+          playerName: 'Bob Durand',
+          status: 'served',
+          source: 'onsite',
+          payment: 'ESP',
+          mealArticleId: 'repas-1'),
+      testMeal(
+          id: 'm3',
+          playerName: 'Chloé Petit',
+          status: 'cancelled',
+          mealArticleId: 'repas-1'),
+    ];
+    tester.view.physicalSize = const Size(1000, 1600);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: caisseTheme(AppColors.accent),
+        home: Scaffold(body: MealsPage(controller: controller)),
+      ),
+    );
+
+    expect(find.text('Alice Martin'), findsOneWidget);
+    expect(find.text('Bob Durand'), findsOneWidget);
+    expect(find.text('Chloé Petit'), findsOneWidget);
+    expect(find.text('À PRÉPARER'), findsNWidgets(2));
+    expect(find.text('SERVI'), findsOneWidget);
+    expect(find.text('ANNULÉ'), findsOneWidget);
+    expect(find.text('Sur place · ESP'), findsOneWidget);
+    expect(find.text('HelloAsso'), findsNWidgets(2));
+    expect(find.text('PRÉPARÉS'), findsOneWidget);
+    expect(find.text('SERVIS'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('meals page filters by status and search query', (tester) async {
+    final controller = _MemoryAppController();
+    controller.articles = [
+      testArticle(id: 'repas-1', category: 'REPAS', name: 'Repas'),
+    ];
+    controller.meals = [
+      testMeal(
+          id: 'm1',
+          playerName: 'Alice Martin',
+          status: 'planned',
+          mealArticleId: 'repas-1',
+          note: 'sans porc'),
+      testMeal(
+          id: 'm2',
+          playerName: 'Bob Durand',
+          status: 'cancelled',
+          mealArticleId: 'repas-1'),
+    ];
+    tester.view.physicalSize = const Size(1000, 1600);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: caisseTheme(AppColors.accent),
+        home: Scaffold(body: MealsPage(controller: controller)),
+      ),
+    );
+
+    await tester.tap(find.text('Annulés'));
+    await tester.pumpAndSettle();
+    expect(find.text('Bob Durand'), findsOneWidget);
+    expect(find.text('Alice Martin'), findsNothing);
+
+    await tester.tap(find.text('Tous'));
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byType(TextField).first, 'sans porc');
+    await tester.pumpAndSettle();
+    expect(find.text('Alice Martin'), findsOneWidget);
+    expect(find.text('Bob Durand'), findsNothing);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('meals page asks for a REPAS article when none exists',
+      (tester) async {
+    final controller = _MemoryAppController()
+      ..players = [testPlayer()]
+      ..articles = [testArticle()];
+
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: caisseTheme(AppColors.accent),
+        home: Scaffold(body: MealsPage(controller: controller)),
+      ),
+    );
+
+    expect(
+        find.text(
+            'Ajoutez un article dans la catégorie REPAS pour utiliser ce module.'),
+        findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('sales grid excludes meal articles', (tester) async {
+    final controller = _MemoryAppController();
+    controller.players = [testPlayer(name: 'Alice Dupont')];
+    controller.articles = [
+      testArticle(id: 'boisson', name: 'Soda maison'),
+      testArticle(id: 'repas-1', category: 'REPAS', name: 'Repas Standard'),
+    ];
+    controller.selectPlayer(controller.players.first);
+    tester.view.physicalSize = const Size(1200, 1000);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: caisseTheme(AppColors.accent),
+        home: Scaffold(body: CaissePage(controller: controller)),
+      ),
+    );
+
+    expect(find.text('Soda maison'), findsWidgets);
+    expect(find.text('Repas Standard'), findsNothing);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('root shell shows the meals tab when the module is enabled',
+      (tester) async {
+    final controller = _MemoryAppController()
+      ..tutorialWelcomeSeen = true
+      ..tutorialPagesSeen = {...AppTabIds.all};
+    tester.view.physicalSize = const Size(1200, 700);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: caisseTheme(AppColors.accent),
+        home: RootShell(
+          controller: controller,
+          licenseService: _MockLicenseService(),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(
+        find.descendant(
+            of: find.byType(NavigationRail), matching: find.text('Repas')),
+        findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('root shell hides the meals tab when the module is disabled',
+      (tester) async {
+    final controller = _MemoryAppController()
+      ..tutorialWelcomeSeen = true
+      ..tutorialPagesSeen = {...AppTabIds.all};
+    controller.appSettings =
+        controller.appSettings.copyWith(mealsEnabled: false);
+    tester.view.physicalSize = const Size(1200, 700);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: caisseTheme(AppColors.accent),
+        home: RootShell(
+          controller: controller,
+          licenseService: _MockLicenseService(),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(
+        find.descendant(
+            of: find.byType(NavigationRail), matching: find.text('Repas')),
+        findsNothing);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('config toggle disables the meals module and hides its tab',
+      (tester) async {
+    final controller = _MemoryAppController()
+      ..tutorialWelcomeSeen = true
+      ..tutorialPagesSeen = {...AppTabIds.all};
+    tester.view.physicalSize = const Size(1200, 700);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: caisseTheme(AppColors.accent),
+        home: RootShell(
+          controller: controller,
+          licenseService: _MockLicenseService(),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.descendant(
+      of: find.byType(NavigationRail),
+      matching: find.text('Config'),
+    ));
+    await tester.pumpAndSettle();
+
+    expect(find.byType(ConfigPage), findsOneWidget);
+
+    final configList = find
+        .descendant(of: find.byType(ConfigPage), matching: find.byType(ListView))
+        .first;
+    await tester.drag(configList, const Offset(0, -600));
+    await tester.pumpAndSettle();
+    await tester.drag(configList, const Offset(0, -600));
+    await tester.pumpAndSettle();
+
+    final mealsSwitch = find.widgetWithText(SwitchListTile, 'Activer les repas');
+    expect(mealsSwitch, findsOneWidget);
+    await tester.tap(mealsSwitch);
+    await tester.pumpAndSettle();
+
+    expect(controller.mealsEnabled, isFalse);
+    expect(
+        find.descendant(
+            of: find.byType(NavigationRail), matching: find.text('Repas')),
+        findsNothing);
     expect(tester.takeException(), isNull);
   });
 
