@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 
 import '../controllers/app_controller.dart';
+import '../services/firebase_bootstrap.dart';
+import '../services/firebase_monitoring_service.dart';
 import '../services/license/license_service.dart';
 import '../services/secure_settings_service.dart';
 import '../ui/root_shell.dart';
@@ -28,6 +30,8 @@ class _TillyAppState extends State<TillyApp> {
     licenseService = LicenseService(secureStorage: secureStorage)
       ..addListener(_applyAccountScope);
     _initializeLicense();
+    WidgetsBinding.instance
+        .addPostFrameCallback((_) => _initializeDeferredServices());
   }
 
   Future<void> _initializeLicense() async {
@@ -35,6 +39,20 @@ class _TillyAppState extends State<TillyApp> {
     await controller.switchDataScope(licenseService.accountId);
     if (mounted) {
       setState(() => _ready = true);
+    }
+  }
+
+  // Monitoring, sync bootstrap and the Firebase settings read are not needed
+  // for the first frames: starting them after the first frame keeps the app
+  // startup as fast as the local database allows.
+  Future<void> _initializeDeferredServices() async {
+    final monitoring = FirebaseMonitoringService.initialize();
+    final settingsFuture = secureStorage.loadFirebaseSettings();
+    await monitoring;
+    try {
+      await FirebaseBootstrap.initialize(await settingsFuture);
+    } finally {
+      if (mounted) controller.applyDeferredFirebaseBootstrap();
     }
   }
 

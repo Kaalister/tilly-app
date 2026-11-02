@@ -6,6 +6,7 @@ import '../../platform/backup_and_links.dart';
 import '../../utils/iterable_extensions.dart';
 import '../theme.dart';
 import '../widgets/common_widgets.dart';
+import '../widgets/page_refresh.dart';
 
 class MealsPage extends StatefulWidget {
   const MealsPage({required this.controller, super.key});
@@ -21,8 +22,17 @@ class _MealsPageState extends State<MealsPage> {
   String query = '';
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context) => PageRefresh(
+        controller: widget.controller,
+        builder: _buildPage,
+      );
+
+  Widget _buildPage(BuildContext context) {
     final controller = widget.controller;
+    final articlesById = {
+      for (final article in controller.articles) article.id: article,
+    };
+    final hasMealArticles = controller.mealArticles.isNotEmpty;
     final prepared =
         controller.meals.where((meal) => meal.status == 'prepared').length;
     final served =
@@ -48,98 +58,110 @@ class _MealsPageState extends State<MealsPage> {
         return compare != 0 ? compare : a.playerName.compareTo(b.playerName);
       });
 
-    return ListView(
+    return ListView.builder(
       padding: const EdgeInsets.all(12),
-      children: [
-        SectionTitle(
-          'Repas',
-          trailing: FilledButton.icon(
-            onPressed:
-                controller.players.isEmpty || controller.mealArticles.isEmpty
-                    ? null
-                    : () => showMealDialog(context, controller),
-            icon: const Icon(Icons.add),
-            label: const Text('Ajouter'),
-          ),
-        ),
-        GridView.count(
-          shrinkWrap: true,
-          physics: const NeverScrollableScrollPhysics(),
-          crossAxisCount: MediaQuery.sizeOf(context).width > 700 ? 4 : 2,
-          mainAxisSpacing: 8,
-          crossAxisSpacing: 8,
-          childAspectRatio: 1.8,
-          children: [
-            MetricCard(
-                label: 'À préparer', value: '$planned', color: AppColors.warn),
-            MetricCard(
-                label: 'Préparés',
-                value: '$prepared',
-                color: AppColors.accent2),
-            MetricCard(
-                label: 'Servis', value: '$served', color: AppColors.cash),
-            MetricCard(
-                label: 'Sur place', value: '$onsite', color: AppColors.accent),
-          ],
-        ),
-        const SizedBox(height: 10),
-        TacticalCard(
-          child: Column(
+      itemCount: visible.length + 1,
+      itemBuilder: (context, index) {
+        if (index == 0) {
+          return Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              TextField(
-                decoration: const InputDecoration(
-                  labelText: 'Rechercher un participant ou une note',
-                  prefixIcon: Icon(Icons.search),
+              SectionTitle(
+                'Repas',
+                trailing: FilledButton.icon(
+                  onPressed:
+                      controller.players.isEmpty || !hasMealArticles
+                          ? null
+                          : () => showMealDialog(context, controller),
+                  icon: const Icon(Icons.add),
+                  label: const Text('Ajouter'),
                 ),
-                onChanged: (value) => setState(() => query = value),
               ),
-              const SizedBox(height: 10),
-              Wrap(
-                spacing: 8,
-                runSpacing: 8,
+              GridView.count(
+                shrinkWrap: true,
+                physics: const NeverScrollableScrollPhysics(),
+                crossAxisCount: MediaQuery.sizeOf(context).width > 700 ? 4 : 2,
+                mainAxisSpacing: 8,
+                crossAxisSpacing: 8,
+                childAspectRatio: 1.8,
                 children: [
-                  _mealFilterChip('Tous', 'all'),
-                  _mealFilterChip('À préparer', 'planned'),
-                  _mealFilterChip('À remettre', 'prepared'),
-                  _mealFilterChip('Servis', 'served'),
-                  _mealFilterChip('Annulés', 'cancelled'),
+                  MetricCard(
+                      label: 'À préparer',
+                      value: '$planned',
+                      color: AppColors.warn),
+                  MetricCard(
+                      label: 'Préparés',
+                      value: '$prepared',
+                      color: AppColors.accent2),
+                  MetricCard(
+                      label: 'Servis', value: '$served', color: AppColors.cash),
+                  MetricCard(
+                      label: 'Sur place',
+                      value: '$onsite',
+                      color: AppColors.accent),
                 ],
               ),
+              const SizedBox(height: 10),
+              TacticalCard(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    TextField(
+                      decoration: const InputDecoration(
+                        labelText: 'Rechercher un participant ou une note',
+                        prefixIcon: Icon(Icons.search),
+                      ),
+                      onChanged: (value) => setState(() => query = value),
+                    ),
+                    const SizedBox(height: 10),
+                    Wrap(
+                      spacing: 8,
+                      runSpacing: 8,
+                      children: [
+                        _mealFilterChip('Tous', 'all'),
+                        _mealFilterChip('À préparer', 'planned'),
+                        _mealFilterChip('À remettre', 'prepared'),
+                        _mealFilterChip('Servis', 'served'),
+                        _mealFilterChip('Annulés', 'cancelled'),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 10),
+              if (controller.players.isEmpty)
+                const TacticalCard(
+                  child: Padding(
+                    padding: EdgeInsets.all(16),
+                    child: Text(
+                        'Ajoutez ou importez des participants avant de créer des repas.'),
+                  ),
+                )
+              else if (!hasMealArticles)
+                const TacticalCard(
+                  borderColor: AppColors.warn,
+                  child: Padding(
+                    padding: EdgeInsets.all(16),
+                    child: Text(
+                        'Ajoutez un article dans la catégorie REPAS pour utiliser ce module.'),
+                  ),
+                )
+              else if (visible.isEmpty)
+                const TacticalCard(
+                  child: Padding(
+                    padding: EdgeInsets.all(18),
+                    child: Center(child: Text('Aucun repas dans cette vue')),
+                  ),
+                ),
             ],
-          ),
-        ),
-        const SizedBox(height: 10),
-        if (controller.players.isEmpty)
-          const TacticalCard(
-            child: Padding(
-              padding: EdgeInsets.all(16),
-              child: Text(
-                  'Ajoutez ou importez des participants avant de créer des repas.'),
-            ),
-          )
-        else if (controller.mealArticles.isEmpty)
-          const TacticalCard(
-            borderColor: AppColors.warn,
-            child: Padding(
-              padding: EdgeInsets.all(16),
-              child: Text(
-                  'Ajoutez un article dans la catégorie REPAS pour utiliser ce module.'),
-            ),
-          )
-        else if (visible.isEmpty)
-          const TacticalCard(
-            child: Padding(
-              padding: EdgeInsets.all(18),
-              child: Center(child: Text('Aucun repas dans cette vue')),
-            ),
-          ),
-        for (final meal in visible)
-          Padding(
-            padding: const EdgeInsets.only(bottom: 8),
-            child: _mealCard(context, meal),
-          ),
-      ],
+          );
+        }
+        final meal = visible[index - 1];
+        return Padding(
+          padding: const EdgeInsets.only(bottom: 8),
+          child: _mealCard(context, meal, articlesById),
+        );
+      },
     );
   }
 
@@ -149,21 +171,13 @@ class _MealsPageState extends State<MealsPage> {
         onSelected: (_) => setState(() => filter = value),
       );
 
-  Widget _mealCard(BuildContext context, MealOrder meal) {
+  Widget _mealCard(BuildContext context, MealOrder meal,
+      Map<String, Article> articlesById) {
     final controller = widget.controller;
     final stockLines = [
-      controller.articles
-          .where((article) => article.id == meal.mealArticleId)
-          .firstOrNull
-          ?.name,
-      controller.articles
-          .where((article) => article.id == meal.drinkArticleId)
-          .firstOrNull
-          ?.name,
-      controller.articles
-          .where((article) => article.id == meal.snackArticleId)
-          .firstOrNull
-          ?.name,
+      articlesById[meal.mealArticleId]?.name,
+      articlesById[meal.drinkArticleId]?.name,
+      articlesById[meal.snackArticleId]?.name,
     ].whereType<String>().join(' · ');
     final statusColor = meal.status == 'cancelled'
         ? AppColors.danger
@@ -202,9 +216,7 @@ class _MealsPageState extends State<MealsPage> {
     final preparationAlerts = <String>[];
     if (meal.status == 'planned') {
       for (final entry in meal.stockItems.entries) {
-        final article = controller.articles
-            .where((value) => value.id == entry.key)
-            .firstOrNull;
+        final article = articlesById[entry.key];
         if (article == null) continue;
         final after = article.stock - entry.value;
         if (after < 0) {

@@ -6,6 +6,7 @@ import '../../exports/pdf_exports.dart';
 import '../../platform/backup_and_links.dart';
 import '../theme.dart';
 import '../widgets/common_widgets.dart';
+import '../widgets/page_refresh.dart';
 
 class BilanPage extends StatelessWidget {
   const BilanPage({required this.controller, super.key});
@@ -13,7 +14,12 @@ class BilanPage extends StatelessWidget {
   final AppController controller;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context) => PageRefresh(
+        controller: controller,
+        builder: _buildPage,
+      );
+
+  Widget _buildPage(BuildContext context) {
     final totals = controller.paymentTotals();
     final donations = controller.activeSales
         .fold<double>(0, (total, sale) => total + sale.donation);

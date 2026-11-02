@@ -91,6 +91,7 @@ class _ActivationPageState extends State<ActivationPage> {
                         _welcomeImage,
                         height: 150,
                         fit: BoxFit.contain,
+                        cacheHeight: 450,
                         errorBuilder: (_, __, ___) => Icon(
                           Icons.bolt,
                           size: 96,

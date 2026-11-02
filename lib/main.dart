@@ -9,22 +9,18 @@ import 'package:sqflite_common_ffi/sqflite_ffi.dart' as sqflite_ffi;
 
 import 'src/app/app.dart';
 import 'src/services/app_version_service.dart';
-import 'src/services/firebase_bootstrap.dart';
-import 'src/services/firebase_monitoring_service.dart';
-import 'src/services/secure_settings_service.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await _loadEnvironment();
-  await initializeAppVersion();
-  await _lockPhoneToPortrait();
+  await Future.wait([
+    initializeAppVersion(),
+    _lockPhoneToPortrait(),
+  ]);
   if (Platform.isWindows || Platform.isLinux) {
     sqflite_ffi.sqfliteFfiInit();
     databaseFactory = sqflite_ffi.databaseFactoryFfi;
   }
-  await FirebaseMonitoringService.initialize();
-  final firebaseSettings = await SecureSettingsService().loadFirebaseSettings();
-  await FirebaseBootstrap.initialize(firebaseSettings);
   runApp(const TillyApp());
 }
 

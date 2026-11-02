@@ -1569,7 +1569,10 @@ Future<void> showPaypalQrDialog(
   final link = controller.paypalMeLink;
   if (link.isEmpty) return;
   final total = controller.cartTotal;
-  final qrData = total > 0 ? '$link/${total.toStringAsFixed(2)}' : link;
+  // PayPal no longer honours an amount appended to a PayPal.Me link: the
+  // customer must type it on the profile page, so the QR stays on the plain
+  // link and the amount is displayed next to it.
+  final qrData = link;
   final validate = await showDialog<bool>(
     context: context,
     builder: (context) => _PaypalQrDialog(qrData: qrData, total: total),
@@ -1617,7 +1620,7 @@ class _PaypalQrDialog extends StatelessWidget {
             ),
             const SizedBox(height: 12),
             Text(
-              'Le client scanne ce QR code avec son appareil photo ou l’app PayPal : le montant de ${money(total)} est prérempli, il peut le modifier.',
+              'Le client scanne ce QR code avec son appareil photo ou l’app PayPal, puis saisit ${money(total)}.',
               textAlign: TextAlign.center,
               style: const TextStyle(color: AppColors.muted),
             ),

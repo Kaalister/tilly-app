@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:flutter/foundation.dart' show visibleForTesting;
 import 'package:path/path.dart' as path;
 import 'package:path_provider/path_provider.dart';
 import 'package:sqflite/sqflite.dart';
@@ -22,13 +23,20 @@ class LocalDatabase {
   String? _userScopeId;
   final String? _databasePathOverride;
   final String? _databaseDirectoryOverride;
+  _PersistSnapshot _snapshot = _PersistSnapshot();
+
+  /// Number of business rows written by the last [saveAll] calls. Rows that
+  /// are unchanged since the previous save are skipped, this counter lets the
+  /// tests prove it.
+  @visibleForTesting
+  int debugBusinessWrites = 0;
 
   Future<Database> get database async {
     if (_db != null) return _db!;
     final dbPath = await _databasePath();
     _db = await openDatabase(
       dbPath,
-      version: 10,
+      version: 11,
       onConfigure: (db) => db.execute('PRAGMA foreign_keys = ON'),
       onCreate: _create,
       onUpgrade: _upgrade,
@@ -44,6 +52,7 @@ class LocalDatabase {
     await _db?.close();
     _db = null;
     _userScopeId = nextScope;
+    _snapshot = _PersistSnapshot();
   }
 
   Future<String> _databasePath() => _pathForScope(_userScopeId);
@@ -280,7 +289,27 @@ class LocalDatabase {
         FOREIGN KEY (cash_count_id) REFERENCES cash_counts(id) ON DELETE CASCADE
       )
     ''');
+    await _createIndexes(db);
   }
+
+  Future<void> _createIndexes(DatabaseExecutor db) async {
+    for (final statement in _indexStatements) {
+      await db.execute(statement);
+    }
+  }
+
+  static const _indexStatements = <String>[
+    'CREATE INDEX IF NOT EXISTS idx_session_players_session ON session_players(session_id)',
+    'CREATE INDEX IF NOT EXISTS idx_session_players_player ON session_players(player_id)',
+    'CREATE INDEX IF NOT EXISTS idx_sales_session ON sales(session_id)',
+    'CREATE INDEX IF NOT EXISTS idx_sale_items_sale ON sale_items(sale_id)',
+    'CREATE INDEX IF NOT EXISTS idx_meal_orders_session ON meal_orders(session_id)',
+    'CREATE INDEX IF NOT EXISTS idx_stock_movements_session ON stock_movements(session_id)',
+    'CREATE INDEX IF NOT EXISTS idx_stock_movements_article ON stock_movements(article_id)',
+    'CREATE INDEX IF NOT EXISTS idx_cash_counts_session ON cash_counts(session_id)',
+    'CREATE INDEX IF NOT EXISTS idx_cash_count_lines_count ON cash_count_lines(cash_count_id)',
+    'CREATE INDEX IF NOT EXISTS idx_players_email ON players(email)',
+  ];
 
   Future<void> _upgrade(Database db, int oldVersion, int newVersion) async {
     if (oldVersion >= 2) {
@@ -292,6 +321,7 @@ class LocalDatabase {
       if (oldVersion < 8) await _upgradeToV8(db);
       if (oldVersion < 9) await _upgradeToV9(db);
       if (oldVersion < 10) await _upgradeToV10(db);
+      if (oldVersion < 11) await _upgradeToV11(db);
       return;
     }
     final now = DateTime.now().toIso8601String();
@@ -589,6 +619,17 @@ class LocalDatabase {
         whereArgs: ['tutorial_welcome_seen', 'tutorial_pages_seen']);
   }
 
+  Future<void> _upgradeToV11(Database db) async {
+    for (final statement in _indexStatements) {
+      try {
+        await db.execute(statement);
+      } catch (_) {
+        // Missing table on an exotic legacy database: the index is recreated
+        // the next time the table is (re)created.
+      }
+    }
+  }
+
   Future<void> _safeAddColumn(
       Database db, String table, String columnDefinition) async {
     try {
@@ -814,6 +855,7 @@ class LocalDatabase {
 
   Future<void> deleteSession(String sessionId) async {
     final db = await database;
+    _snapshot = _PersistSnapshot();
     await db.transaction((txn) async {
       final saleRows = await txn.query('sales',
           columns: ['id'], where: 'session_id = ?', whereArgs: [sessionId]);
@@ -846,6 +888,7 @@ class LocalDatabase {
 
   Future<void> resetBusinessData() async {
     final db = await database;
+    _snapshot = _PersistSnapshot();
     await db.transaction((txn) async {
       for (final table in [
         'cash_count_lines',
@@ -928,38 +971,53 @@ class LocalDatabase {
     return rows.map((row) => '${row['name']}').toList();
   }
 
+  static const _sqlBatchSize = 500;
+
+  List<SaleItem> _saleItemsFromRow(Map<String, Object?> item) => [
+        SaleItem(
+          articleId: '${item['article_id'] ?? item['article_name_snapshot']}',
+          name: '${item['article_name_snapshot']}',
+          icon: '${item['icon_snapshot'] ?? '📦'}',
+          type: '${item['article_type_snapshot']}',
+          quantity: (item['quantity'] as num).round(),
+          price: (item['unit_price'] as num).toDouble(),
+          publicPrice: (item['price_public_snapshot'] as num).toDouble(),
+          memberPrice: (item['price_member_snapshot'] as num).toDouble(),
+        )
+      ];
+
   Future<List<Sale>> loadSales(String sessionId) async {
     final db = await database;
     final rows = await db.query('sales',
         where: 'session_id = ?',
         whereArgs: [sessionId],
         orderBy: 'created_at ASC');
+    if (rows.isEmpty) return const [];
+    final saleIds = [for (final row in rows) '${row['id']}'];
+    final itemsBySale = <String, List<SaleItem>>{};
+    for (var start = 0; start < saleIds.length; start += _sqlBatchSize) {
+      final end = start + _sqlBatchSize;
+      final chunk = saleIds.sublist(start, end > saleIds.length ? saleIds.length : end);
+      final placeholders = List.filled(chunk.length, '?').join(', ');
+      final itemRows = await db.query('sale_items',
+          where: 'sale_id IN ($placeholders)',
+          whereArgs: chunk,
+          orderBy: 'id ASC');
+      for (final item in itemRows) {
+        final items = itemsBySale.putIfAbsent('${item['sale_id']}', () => []);
+        items.addAll(_saleItemsFromRow(item));
+      }
+    }
     final result = <Sale>[];
     for (final row in rows) {
       final saleId = '${row['id']}';
-      final itemRows = await db.query('sale_items',
-          where: 'sale_id = ?', whereArgs: [saleId], orderBy: 'id ASC');
       result.add(Sale(
         id: saleId,
         playerId: '${row['player_id'] ?? ''}',
         playerName: '${row['player_name_snapshot']}',
         playerType: '${row['player_type_snapshot']}',
         tariff: '${row['tariff_applied']}',
-        items: itemRows
-            .map((item) => SaleItem(
-                  articleId:
-                      '${item['article_id'] ?? item['article_name_snapshot']}',
-                  name: '${item['article_name_snapshot']}',
-                  icon: '${item['icon_snapshot'] ?? '📦'}',
-                  type: '${item['article_type_snapshot']}',
-                  quantity: (item['quantity'] as num).round(),
-                  price: (item['unit_price'] as num).toDouble(),
-                  publicPrice:
-                      (item['price_public_snapshot'] as num).toDouble(),
-                  memberPrice:
-                      (item['price_member_snapshot'] as num).toDouble(),
-                ))
-            .toList(),
+        items: itemsBySale[saleId] ?? const [],
         totalArticles: (row['total_articles'] as num).toDouble(),
         donation: (row['donation_amount'] as num).toDouble(),
         payment: '${row['payment_method']}',
@@ -1084,26 +1142,48 @@ class LocalDatabase {
     final now = DateTime.now().toIso8601String();
     final session = state.activeSession;
     if (session == null) return;
+    final previous = _snapshot;
+    final draft = previous.copy();
+    var writes = 0;
+
     await db.transaction((txn) async {
-      await _upsert(
-        txn,
-        'sessions',
-        {
-          'id': session.id,
-          'name': session.name,
-          'event_date': session.eventDate.toIso8601String(),
-          'status': session.status,
-          'notes': session.notes,
-          'helloasso_form_slug': session.helloassoFormSlug,
-          'helloasso_form_type': session.helloassoFormType,
-          'helloasso_event_name': session.helloassoEventName,
-          'helloasso_event_url': session.helloassoEventUrl,
-          'helloasso_event_id': session.helloassoEventId,
-          'helloasso_synced_at': session.helloassoSyncedAt?.toIso8601String(),
-          'created_at': session.createdAt.toIso8601String(),
-          'closed_at': session.closedAt?.toIso8601String(),
-        },
-      );
+      final sessionFingerprint = _fingerprint({
+        'id': session.id,
+        'name': session.name,
+        'event_date': session.eventDate.toIso8601String(),
+        'status': session.status,
+        'notes': session.notes,
+        'helloasso_form_slug': session.helloassoFormSlug,
+        'helloasso_form_type': session.helloassoFormType,
+        'helloasso_event_name': session.helloassoEventName,
+        'helloasso_event_url': session.helloassoEventUrl,
+        'helloasso_event_id': session.helloassoEventId,
+        'helloasso_synced_at': session.helloassoSyncedAt?.toIso8601String(),
+        'closed_at': session.closedAt?.toIso8601String(),
+      });
+      if (previous.sessions[session.id] != sessionFingerprint) {
+        await _upsert(
+          txn,
+          'sessions',
+          {
+            'id': session.id,
+            'name': session.name,
+            'event_date': session.eventDate.toIso8601String(),
+            'status': session.status,
+            'notes': session.notes,
+            'helloasso_form_slug': session.helloassoFormSlug,
+            'helloasso_form_type': session.helloassoFormType,
+            'helloasso_event_name': session.helloassoEventName,
+            'helloasso_event_url': session.helloassoEventUrl,
+            'helloasso_event_id': session.helloassoEventId,
+            'helloasso_synced_at': session.helloassoSyncedAt?.toIso8601String(),
+            'created_at': session.createdAt.toIso8601String(),
+            'closed_at': session.closedAt?.toIso8601String(),
+          },
+        );
+        draft.sessions[session.id] = sessionFingerprint;
+        writes++;
+      }
       await txn.insert('app_settings',
           {'key': 'active_session_id', 'value': session.id, 'updated_at': now},
           conflictAlgorithm: ConflictAlgorithm.replace);
@@ -1126,7 +1206,18 @@ class LocalDatabase {
         for (final player in [...state.allPlayers, ...state.players])
           if (player.id.trim().isNotEmpty) player.id: player,
       }.values.toList();
+      final playerFingerprints = <String, String>{};
       for (final player in uniqueAllPlayers) {
+        final fingerprint = _fingerprint({
+          'name': player.name,
+          'first_name': player.firstName,
+          'last_name': player.lastName,
+          'email': player.email.trim().toLowerCase(),
+          'helloasso_user_id': player.helloassoUserId,
+          'type': player.type,
+        });
+        playerFingerprints[player.id] = fingerprint;
+        if (previous.players[player.id] == fingerprint) continue;
         await _upsert(
           txn,
           'players',
@@ -1142,15 +1233,31 @@ class LocalDatabase {
             'updated_at': now,
           },
         );
+        writes++;
       }
+      draft.players = playerFingerprints;
 
-      await txn.delete('session_players',
-          where: 'session_id = ?', whereArgs: [session.id]);
       final uniqueSessionPlayers = <String, Player>{
         for (final player in state.players)
           if (player.id.trim().isNotEmpty) player.id: player,
       }.values.toList();
-      for (final player in uniqueSessionPlayers) {
+      final previousSessionPlayers =
+          previous.sessionPlayers[session.id] ??
+              await _sessionPlayerIds(txn, session.id);
+      final sessionPlayerFingerprints = <String, String>{
+        for (final player in uniqueSessionPlayers)
+          player.id: _fingerprint({
+            'name': player.name,
+            'type': player.type,
+          }),
+      };
+      for (final entry in sessionPlayerFingerprints.entries) {
+        if (previousSessionPlayers[entry.key] == entry.value) continue;
+        final player = uniqueSessionPlayers
+            .firstWhere((candidate) => candidate.id == entry.key);
+        await txn.delete('session_players',
+            where: 'session_id = ? AND player_id = ?',
+            whereArgs: [session.id, player.id]);
         await txn.insert(
             'session_players',
             {
@@ -1162,25 +1269,62 @@ class LocalDatabase {
               'created_at': now,
             },
             conflictAlgorithm: ConflictAlgorithm.replace);
+        writes++;
       }
+      for (final playerId in previousSessionPlayers.keys) {
+        if (sessionPlayerFingerprints.containsKey(playerId)) continue;
+        await txn.delete('session_players',
+            where: 'session_id = ? AND player_id = ?',
+            whereArgs: [session.id, playerId]);
+        writes++;
+      }
+      draft.sessionPlayers[session.id] = sessionPlayerFingerprints;
 
-      await txn.update(
-          'articles', {'category_id': null, 'is_active': 0, 'updated_at': now});
-      await txn.delete('article_categories');
-      for (var i = 0; i < state.articleCategories.length; i++) {
-        final category = state.articleCategories[i];
-        await txn.insert('article_categories', {
-          'id': stableCategoryId(category),
-          'name': category,
-          'sort_order': i,
-        });
+      final categoriesFingerprint = _fingerprint({
+        'categories': state.articleCategories.join('\u0001'),
+      });
+      final categoriesChanged =
+          previous.articleCategories != categoriesFingerprint;
+      if (categoriesChanged) {
+        await txn.update('articles',
+            {'category_id': null, 'is_active': 0, 'updated_at': now});
+        await txn.delete('article_categories');
+        for (var i = 0; i < state.articleCategories.length; i++) {
+          final category = state.articleCategories[i];
+          await txn.insert('article_categories', {
+            'id': stableCategoryId(category),
+            'name': category,
+            'sort_order': i,
+          });
+        }
+        draft.articleCategories = categoriesFingerprint;
+        writes++;
       }
+      final articleFingerprints = <String, String>{};
       for (var i = 0; i < state.articles.length; i++) {
         final article = state.articles[i];
         final categoryId = stableCategoryId(article.category);
         await txn.insert('article_categories',
             {'id': categoryId, 'name': article.category, 'sort_order': i},
             conflictAlgorithm: ConflictAlgorithm.ignore);
+        final fingerprint = _fingerprint({
+          'category_id': categoryId,
+          'name': article.name,
+          'type': article.type,
+          'icon': article.icon,
+          'price_public': article.price,
+          'price_member': article.memberPrice,
+          'stock_current': article.stock,
+          'stock_alert_threshold': article.threshold,
+          'bb_auto_quantity': article.bbAuto,
+          'gas_auto_quantity': article.gasAuto,
+          'is_active': 1,
+          'sort_order': i,
+        });
+        articleFingerprints[article.id] = fingerprint;
+        if (!categoriesChanged && previous.articles[article.id] == fingerprint) {
+          continue;
+        }
         await _upsert(
           txn,
           'articles',
@@ -1202,12 +1346,46 @@ class LocalDatabase {
             'updated_at': now,
           },
         );
+        writes++;
       }
+      for (final articleId in previous.articles.keys) {
+        if (articleFingerprints.containsKey(articleId)) continue;
+        await txn.update(
+          'articles',
+          {'category_id': null, 'is_active': 0, 'updated_at': now},
+          where: 'id = ?',
+          whereArgs: [articleId],
+        );
+        writes++;
+      }
+      draft.articles = articleFingerprints;
 
-      await txn.delete('meal_orders',
-          where: 'session_id = ?', whereArgs: [session.id]);
-
+      final previousSales =
+          previous.sales[session.id] ?? const <String, String>{};
+      final saleFingerprints = <String, String>{};
       for (final sale in state.sales) {
+        final fingerprint = _fingerprint({
+          'player_id': sale.playerId,
+          'player_name_snapshot': sale.playerName,
+          'player_type_snapshot': sale.playerType,
+          'tariff_applied': sale.tariff,
+          'payment_method': sale.payment,
+          'status': sale.status,
+          'total_articles': sale.totalArticles,
+          'donation_amount': sale.donation,
+          'total_amount': sale.total,
+          'created_at': sale.createdAt.toIso8601String(),
+          'cancelled_at': sale.cancelledAt?.toIso8601String(),
+          'cancellation_reason': sale.cancellationReason,
+          'items': [
+            for (final item in sale.items)
+              '${item.articleId}\u0002${item.name}\u0002${item.type}'
+                  '\u0002${item.quantity}\u0002${item.price}'
+                  '\u0002${item.publicPrice}\u0002${item.memberPrice}',
+          ].join('\u0003'),
+        });
+        saleFingerprints[sale.id] = fingerprint;
+        if (previousSales[sale.id] == fingerprint) continue;
         await _upsert(
           txn,
           'sales',
@@ -1251,12 +1429,16 @@ class LocalDatabase {
             'line_total': item.price * item.quantity,
           });
         }
+        writes++;
       }
+      draft.sales[session.id] = saleFingerprints;
 
+      final previousMeals =
+          previous.meals[session.id] ?? const <String, String>{};
+      final mealFingerprints = <String, String>{};
       for (final meal in state.meals) {
-        await txn.insert('meal_orders', {
-          'id': meal.id,
-          'session_id': session.id,
+        final optionsJson = jsonEncode(meal.options);
+        final fingerprint = _fingerprint({
           'player_id': meal.playerId,
           'player_name_snapshot': meal.playerName,
           'player_type_snapshot': meal.playerType,
@@ -1270,27 +1452,77 @@ class LocalDatabase {
           'snack_article_id':
               meal.snackArticleId.isEmpty ? null : meal.snackArticleId,
           'formula': meal.formula,
-          'options_json': jsonEncode(meal.options),
+          'options_json': optionsJson,
           'note': meal.note,
           'created_at': meal.createdAt.toIso8601String(),
           'prepared_at': meal.preparedAt?.toIso8601String(),
           'served_at': meal.servedAt?.toIso8601String(),
           'updated_at': meal.updatedAt.toIso8601String(),
         });
+        mealFingerprints[meal.id] = fingerprint;
+        if (previousMeals[meal.id] == fingerprint) continue;
+        await txn.insert(
+          'meal_orders',
+          {
+            'id': meal.id,
+            'session_id': session.id,
+            'player_id': meal.playerId,
+            'player_name_snapshot': meal.playerName,
+            'player_type_snapshot': meal.playerType,
+            'source': meal.source,
+            'status': meal.status,
+            'sale_id': meal.saleId.isEmpty ? null : meal.saleId,
+            'payment_method': meal.payment.isEmpty ? null : meal.payment,
+            'meal_article_id': meal.mealArticleId,
+            'drink_article_id':
+                meal.drinkArticleId.isEmpty ? null : meal.drinkArticleId,
+            'snack_article_id':
+                meal.snackArticleId.isEmpty ? null : meal.snackArticleId,
+            'formula': meal.formula,
+            'options_json': optionsJson,
+            'note': meal.note,
+            'created_at': meal.createdAt.toIso8601String(),
+            'prepared_at': meal.preparedAt?.toIso8601String(),
+            'served_at': meal.servedAt?.toIso8601String(),
+            'updated_at': meal.updatedAt.toIso8601String(),
+          },
+          conflictAlgorithm: ConflictAlgorithm.replace,
+        );
+        writes++;
       }
+      for (final mealId in previousMeals.keys) {
+        if (mealFingerprints.containsKey(mealId)) continue;
+        await txn.delete('meal_orders', where: 'id = ?', whereArgs: [mealId]);
+        writes++;
+      }
+      draft.meals[session.id] = mealFingerprints;
 
-      final cashRows = await txn.query('cash_counts',
-          columns: ['id'], where: 'session_id = ?', whereArgs: [session.id]);
-      for (final cashId in cashRows.map((row) => '${row['id']}')) {
-        await txn.delete('cash_count_lines',
-            where: 'cash_count_id = ?', whereArgs: [cashId]);
+      final cashStartFingerprint =
+          _cashFingerprint(state.cashStart, state.cashTotal('start'));
+      final cashEndFingerprint =
+          _cashFingerprint(state.cashEnd, state.cashTotal('end'));
+      final previousCash =
+          previous.cash[session.id] ?? const <String, String>{};
+      if (previousCash['start'] != cashStartFingerprint ||
+          previousCash['end'] != cashEndFingerprint) {
+        final cashRows = await txn.query('cash_counts',
+            columns: ['id'], where: 'session_id = ?', whereArgs: [session.id]);
+        for (final cashId in cashRows.map((row) => '${row['id']}')) {
+          await txn.delete('cash_count_lines',
+              where: 'cash_count_id = ?', whereArgs: [cashId]);
+        }
+        await txn.delete('cash_counts',
+            where: 'session_id = ?', whereArgs: [session.id]);
+        await _insertCash(txn, session.id, 'start', state.cashStart,
+            state.cashTotal('start'), now);
+        await _insertCash(
+            txn, session.id, 'end', state.cashEnd, state.cashTotal('end'), now);
+        draft.cash[session.id] = {
+          'start': cashStartFingerprint,
+          'end': cashEndFingerprint,
+        };
+        writes++;
       }
-      await txn.delete('cash_counts',
-          where: 'session_id = ?', whereArgs: [session.id]);
-      await _insertCash(txn, session.id, 'start', state.cashStart,
-          state.cashTotal('start'), now);
-      await _insertCash(
-          txn, session.id, 'end', state.cashEnd, state.cashTotal('end'), now);
       for (final movement in state.pendingStockMovements) {
         await txn.insert('stock_movements', {
           'id': movement.id,
@@ -1304,8 +1536,19 @@ class LocalDatabase {
           'reason': movement.reason,
           'created_at': movement.createdAt.toIso8601String(),
         });
+        writes++;
       }
     });
+    // Only the active session fingerprints are worth keeping in memory: a
+    // session reloaded later is rewritten once, which is still far cheaper
+    // than the previous save-everything behaviour.
+    draft.sales.removeWhere((sessionId, _) => sessionId != session.id);
+    draft.meals.removeWhere((sessionId, _) => sessionId != session.id);
+    draft.cash.removeWhere((sessionId, _) => sessionId != session.id);
+    draft.sessionPlayers
+        .removeWhere((sessionId, _) => sessionId != session.id);
+    _snapshot = draft;
+    debugBusinessWrites = writes;
     state.pendingStockMovements.clear();
   }
 
@@ -1318,6 +1561,22 @@ class LocalDatabase {
     final updated =
         await txn.update(table, values, where: 'id = ?', whereArgs: [id]);
     if (updated == 0) await txn.insert(table, values);
+  }
+
+  /// Existing player rows of a session, used as the deletion baseline when the
+  /// in-memory snapshot does not know this session yet (fresh start, session
+  /// switch). The empty fingerprint forces the caller to rewrite them.
+  Future<Map<String, String>> _sessionPlayerIds(
+      DatabaseExecutor txn, String sessionId) async {
+    final rows = await txn.query('session_players',
+        columns: ['player_id'],
+        where: 'session_id = ?',
+        whereArgs: [sessionId]);
+    return {
+      for (final row in rows)
+        if ('${row['player_id'] ?? ''}'.trim().isNotEmpty)
+          '${row['player_id']}': '',
+    };
   }
 
   Future<void> _insertCash(Transaction txn, String sessionId, String kind,
@@ -1386,6 +1645,7 @@ class LocalDatabase {
     final data = Map<String, dynamic>.from(payload['data'] as Map? ?? {});
     final importConfiguration = data['appSettings'] is List;
     final db = await database;
+    _snapshot = _PersistSnapshot();
     await db.transaction((txn) async {
       for (final table in [
         'cash_count_lines',
@@ -1462,47 +1722,85 @@ class LocalDatabase {
 
   Future<bool> hasBusinessActivity() async {
     final db = await database;
-    Future<int> count(String table) async =>
-        Sqflite.firstIntValue(
-            await db.rawQuery('SELECT COUNT(*) FROM $table')) ??
-        0;
-
-    return await count('players') > 0 ||
-        await count('session_players') > 0 ||
-        await count('sales') > 0 ||
-        await count('sale_items') > 0 ||
-        await count('meal_orders') > 0 ||
-        await count('stock_movements') > 0;
+    final counts = await _bootstrapCounts(db);
+    return ['players', 'session_players', 'sales', 'sale_items', 'meal_orders',
+            'stock_movements']
+        .any((table) => counts[table] != 0);
   }
 
   Future<bool> hasOnlyBootstrapData() async {
     final db = await database;
-    Future<int> count(String table) async =>
-        Sqflite.firstIntValue(
-            await db.rawQuery('SELECT COUNT(*) FROM $table')) ??
-        0;
+    final counts = await _bootstrapCounts(db);
+    return counts['players'] == 0 &&
+        counts['session_players'] == 0 &&
+        counts['sales'] == 0 &&
+        counts['sale_items'] == 0 &&
+        counts['meal_orders'] == 0 &&
+        counts['stock_movements'] == 0 &&
+        counts['cash_counts'] == 0 &&
+        counts['cash_count_lines'] == 0 &&
+        (counts['sessions'] ?? 0) <= 1 &&
+        (counts['articles'] ?? 0) <= defaultArticles().length;
+  }
 
-    final players = await count('players');
-    final sessionPlayers = await count('session_players');
-    final sales = await count('sales');
-    final saleItems = await count('sale_items');
-    final mealOrders = await count('meal_orders');
-    final stockMovements = await count('stock_movements');
-    final cashCounts = await count('cash_counts');
-    final cashCountLines = await count('cash_count_lines');
-    final sessions = await count('sessions');
-    final articles = await count('articles');
+  /// All the table counts in a single round trip: these checks run once per
+  /// debug launch and must stay cheap.
+  Future<Map<String, int>> _bootstrapCounts(Database db) async {
+    final row = (await db.rawQuery('''
+      SELECT
+        (SELECT COUNT(*) FROM players) AS players,
+        (SELECT COUNT(*) FROM session_players) AS session_players,
+        (SELECT COUNT(*) FROM sales) AS sales,
+        (SELECT COUNT(*) FROM sale_items) AS sale_items,
+        (SELECT COUNT(*) FROM meal_orders) AS meal_orders,
+        (SELECT COUNT(*) FROM stock_movements) AS stock_movements,
+        (SELECT COUNT(*) FROM cash_counts) AS cash_counts,
+        (SELECT COUNT(*) FROM cash_count_lines) AS cash_count_lines,
+        (SELECT COUNT(*) FROM sessions) AS sessions,
+        (SELECT COUNT(*) FROM articles) AS articles
+    '''))
+        .first;
+    return {
+      for (final entry in row.entries)
+        entry.key: (entry.value as num?)?.toInt() ?? 0,
+    };
+  }
+}
 
-    return players == 0 &&
-        sessionPlayers == 0 &&
-        sales == 0 &&
-        saleItems == 0 &&
-        mealOrders == 0 &&
-        stockMovements == 0 &&
-        cashCounts == 0 &&
-        cashCountLines == 0 &&
-        sessions <= 1 &&
-        articles <= defaultArticles().length;
+String _fingerprint(Map<String, Object?> values) => values.entries
+    .map((entry) => '${entry.key}\u0004${entry.value}')
+    .join('\u0005');
+
+String _cashFingerprint(Map<String, int> values, double total) {
+  final sortedKeys = values.keys.toList()..sort();
+  return _fingerprint({
+    'total': total,
+    for (final key in sortedKeys) key: values[key],
+  });
+}
+
+class _PersistSnapshot {
+  final Map<String, String> sessions = {};
+  Map<String, String> players = {};
+  Map<String, String> articles = {};
+  String? articleCategories;
+  final Map<String, Map<String, String>> sessionPlayers = {};
+  final Map<String, Map<String, String>> sales = {};
+  final Map<String, Map<String, String>> meals = {};
+  final Map<String, Map<String, String>> cash = {};
+
+  _PersistSnapshot copy() {
+    final clone = _PersistSnapshot()
+      ..articleCategories = articleCategories;
+    clone.sessions.addAll(sessions);
+    clone.players.addAll(players);
+    clone.articles.addAll(articles);
+    sessionPlayers
+        .forEach((key, value) => clone.sessionPlayers[key] = Map.of(value));
+    sales.forEach((key, value) => clone.sales[key] = Map.of(value));
+    meals.forEach((key, value) => clone.meals[key] = Map.of(value));
+    cash.forEach((key, value) => clone.cash[key] = Map.of(value));
+    return clone;
   }
 }
 

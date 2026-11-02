@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:isolate';
 import 'dart:math';
 
 import 'package:flutter/material.dart';
@@ -16,13 +17,16 @@ import '../services/kpi_service.dart';
 Future<void> exportBilanPdf(BuildContext context, AppController controller,
     SessionRecord session) async {
   try {
+    await controller.ensureSessionSalesLoaded(session.id);
     final sales = controller.salesForSession(session.id);
     if (sales.isEmpty) {
-      snack(context, 'Aucune vente à exporter pour cette session');
+      if (context.mounted) {
+        snack(context, 'Aucune vente à exporter pour cette session');
+      }
       return;
     }
 
-    final bytes = await _buildBilanPdf(session, sales);
+    final bytes = await buildBilanPdfBytes(session, sales);
     final now = DateTime.now();
     final fileName =
         'tilly_${_pdfFileDate(session.eventDate)}_${_pdfCompactTimestamp(now)}.pdf';
@@ -40,6 +44,12 @@ Future<void> exportBilanPdf(BuildContext context, AppController controller,
     if (context.mounted) snack(context, 'Export bilan impossible : $error');
   }
 }
+
+/// Layout work runs on a worker isolate so the UI keeps its frame rate.
+@visibleForTesting
+Future<Uint8List> buildBilanPdfBytes(
+        SessionRecord session, List<Sale> sales) =>
+    Isolate.run(() => _buildBilanPdf(session, sales));
 
 Future<Uint8List> _buildBilanPdf(
     SessionRecord session, List<Sale> sales) async {
@@ -458,7 +468,7 @@ Future<void> exportPlayersPdf(
       return;
     }
 
-    final bytes = await _buildPlayersPdf(controller, rows);
+    final bytes = await buildPlayersPdfBytes(controller.session, rows);
     final date = DateTime.now();
     final fileName =
         'tilly_participants_${date.day.toString().padLeft(2, '0')}-${date.month.toString().padLeft(2, '0')}-${date.year}.pdf';
@@ -569,8 +579,13 @@ List<PlayerPdfRow> _playerPdfRows(AppController controller) {
   return rows;
 }
 
+@visibleForTesting
+Future<Uint8List> buildPlayersPdfBytes(
+        String sessionLabel, List<PlayerPdfRow> rows) =>
+    Isolate.run(() => _buildPlayersPdf(sessionLabel, rows));
+
 Future<Uint8List> _buildPlayersPdf(
-    AppController controller, List<PlayerPdfRow> rows) async {
+    String sessionLabel, List<PlayerPdfRow> rows) async {
   final document = pw.Document();
   final date = DateTime.now();
   final total = rows.fold<double>(0, (total, row) => total + row.total);
@@ -655,7 +670,7 @@ Future<Uint8List> _buildPlayersPdf(
         pw.Align(
           alignment: pw.Alignment.centerRight,
           child: pw.Text(
-            controller.session.isEmpty ? '' : 'Session : ${controller.session}',
+            sessionLabel.isEmpty ? '' : 'Session : $sessionLabel',
             style: const pw.TextStyle(fontSize: 8, color: PdfColors.grey700),
           ),
         ),
@@ -785,7 +800,14 @@ String _pdfSaleTariff(Sale sale) {
 Future<void> exportCashPdf(
     BuildContext context, AppController controller) async {
   try {
-    final bytes = await _buildCashPdf(controller);
+    final bytes = await buildCashPdfBytes(
+      start: controller.cashTotal('start'),
+      end: controller.cashTotal('end'),
+      cashSales: controller.paymentTotals()['ESP'] ?? 0,
+      cashStart: Map<String, int>.of(controller.cashStart),
+      cashEnd: Map<String, int>.of(controller.cashEnd),
+      sessionLabel: controller.session,
+    );
     final date = DateTime.now();
     final fileName =
         'tilly_analyse_caisse_${_pdfFileDate(date)}_${_pdfCompactTimestamp(date)}.pdf';
@@ -806,12 +828,34 @@ Future<void> exportCashPdf(
   }
 }
 
-Future<Uint8List> _buildCashPdf(AppController controller) async {
+@visibleForTesting
+Future<Uint8List> buildCashPdfBytes({
+  required double start,
+  required double end,
+  required double cashSales,
+  required Map<String, int> cashStart,
+  required Map<String, int> cashEnd,
+  required String sessionLabel,
+}) =>
+    Isolate.run(() => _buildCashPdf(
+          start: start,
+          end: end,
+          cashSales: cashSales,
+          cashStart: cashStart,
+          cashEnd: cashEnd,
+          sessionLabel: sessionLabel,
+        ));
+
+Future<Uint8List> _buildCashPdf({
+  required double start,
+  required double end,
+  required double cashSales,
+  required Map<String, int> cashStart,
+  required Map<String, int> cashEnd,
+  required String sessionLabel,
+}) async {
   final document = pw.Document();
   final date = DateTime.now();
-  final start = controller.cashTotal('start');
-  final end = controller.cashTotal('end');
-  final cashSales = controller.paymentTotals()['ESP'] ?? 0;
   final theoretical = start + cashSales;
   final gap = end - theoretical;
   final gapOk = gap.abs() < .01;
@@ -826,7 +870,7 @@ Future<Uint8List> _buildCashPdf(AppController controller) async {
         context.pagesCount,
       ),
       build: (context) => [
-        _pdfCashHeader(date, controller),
+        _pdfCashHeader(date, sessionLabel),
         pw.SizedBox(height: 16),
         _pdfSectionHeader('ANALYSE CAISSE ESPECES'),
         pw.Row(
@@ -843,9 +887,9 @@ Future<Uint8List> _buildCashPdf(AppController controller) async {
         pw.SizedBox(height: 12),
         _pdfCashGapBox(gap, gapOk),
         pw.SizedBox(height: 24),
-        _pdfCashCountSection('FOND DEBUT', start, controller.cashStart),
+        _pdfCashCountSection('FOND DEBUT', start, cashStart),
         pw.SizedBox(height: 22),
-        _pdfCashCountSection('FOND FIN', end, controller.cashEnd),
+        _pdfCashCountSection('FOND FIN', end, cashEnd),
       ],
     ),
   );
@@ -853,8 +897,8 @@ Future<Uint8List> _buildCashPdf(AppController controller) async {
   return document.save();
 }
 
-pw.Widget _pdfCashHeader(DateTime date, AppController controller) {
-  final session = controller.session.isEmpty ? 'Événement' : controller.session;
+pw.Widget _pdfCashHeader(DateTime date, String sessionLabel) {
+  final session = sessionLabel.isEmpty ? 'Événement' : sessionLabel;
   return pw.Column(
     children: [
       pw.Center(
@@ -1034,13 +1078,21 @@ String _pdfCompactTimestamp(DateTime date) {
 Future<void> exportKpiPdf(
     BuildContext context, AppController controller) async {
   try {
+    await controller.ensureAllSessionSalesLoaded();
     final rows = kpiRows(controller)..sort(compareKpiRows);
     if (rows.isEmpty) {
-      snack(context, 'Aucune statistique à exporter');
+      if (context.mounted) {
+        snack(context, 'Aucune statistique à exporter');
+      }
       return;
     }
 
-    final bytes = await _buildKpiPdf(controller, rows);
+    final bytes = await buildKpiPdfBytes(
+      rows: rows,
+      sessionCa: _kpiSessionCa(controller),
+      mealsEnabled: controller.mealsEnabled,
+      sessionLabel: controller.session,
+    );
     final date = DateTime.now();
     final fileName =
         'tilly_kpi_${date.day.toString().padLeft(2, '0')}-${date.month.toString().padLeft(2, '0')}-${date.year}_${date.hour.toString().padLeft(2, '0')}${date.minute.toString().padLeft(2, '0')}${date.second.toString().padLeft(2, '0')}.pdf';
@@ -1060,8 +1112,26 @@ Future<void> exportKpiPdf(
   }
 }
 
-Future<Uint8List> _buildKpiPdf(
-    AppController controller, List<KpiRow> rows) async {
+@visibleForTesting
+Future<Uint8List> buildKpiPdfBytes({
+  required List<KpiRow> rows,
+  required List<({SessionRecord session, double ca})> sessionCa,
+  required bool mealsEnabled,
+  required String sessionLabel,
+}) =>
+    Isolate.run(() => _buildKpiPdf(
+          rows: rows,
+          sessionCa: sessionCa,
+          mealsEnabled: mealsEnabled,
+          sessionLabel: sessionLabel,
+        ));
+
+Future<Uint8List> _buildKpiPdf({
+  required List<KpiRow> rows,
+  required List<({SessionRecord session, double ca})> sessionCa,
+  required bool mealsEnabled,
+  required String sessionLabel,
+}) async {
   final document = pw.Document();
   final date = DateTime.now();
   final totalCA = rows.fold<double>(0, (total, row) => total + row.ca);
@@ -1074,17 +1144,15 @@ Future<Uint8List> _buildKpiPdf(
   final topCa = [...rows]..sort((a, b) => b.ca.compareTo(a.ca));
   final topSold = [...rows]..sort((a, b) => b.outgoing.compareTo(a.outgoing));
   final categoryCa = _kpiCategoryCa(rows);
-  final sessionCa = _kpiSessionCa(controller);
-  final mealsEnabled = controller.mealsEnabled;
 
   document.addPage(
     pw.MultiPage(
       pageFormat: PdfPageFormat.a4,
       margin: const pw.EdgeInsets.symmetric(horizontal: 40, vertical: 34),
       footer: (context) => _pdfFooter(
-          date, context.pageNumber, context.pagesCount, controller.session),
+          date, context.pageNumber, context.pagesCount, sessionLabel),
       build: (context) => [
-        _pdfKpiHeader(date, controller),
+        _pdfKpiHeader(date, sessionLabel),
         pw.SizedBox(height: 16),
         pw.Row(
           children: [
@@ -1166,7 +1234,7 @@ Future<Uint8List> _buildKpiPdf(
       pageFormat: PdfPageFormat.a4,
       margin: const pw.EdgeInsets.symmetric(horizontal: 40, vertical: 34),
       footer: (context) => _pdfFooter(
-          date, context.pageNumber, context.pagesCount, controller.session),
+          date, context.pageNumber, context.pagesCount, sessionLabel),
       build: (context) => [
         _pdfSectionHeader('1. CA PAR ARTICLE (TOP 10)'),
         _pdfBarChart(
@@ -1205,7 +1273,7 @@ Future<Uint8List> _buildKpiPdf(
       pageFormat: PdfPageFormat.a4,
       margin: const pw.EdgeInsets.symmetric(horizontal: 40, vertical: 34),
       footer: (context) => _pdfFooter(
-          date, context.pageNumber, context.pagesCount, controller.session),
+          date, context.pageNumber, context.pagesCount, sessionLabel),
       build: (context) => [
         _pdfSectionHeader('4. REPARTITION CA PAR CATEGORIE'),
         _pdfPieChart(categoryCa, totalCA),
@@ -1219,8 +1287,8 @@ Future<Uint8List> _buildKpiPdf(
   return document.save();
 }
 
-pw.Widget _pdfKpiHeader(DateTime date, AppController controller) {
-  final session = controller.session.isEmpty ? 'Événement' : controller.session;
+pw.Widget _pdfKpiHeader(DateTime date, String sessionLabel) {
+  final session = sessionLabel.isEmpty ? 'Événement' : sessionLabel;
   return pw.Column(
     children: [
       pw.Center(

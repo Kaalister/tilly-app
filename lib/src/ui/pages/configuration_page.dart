@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 import 'dart:math';
 
@@ -20,6 +21,7 @@ import '../dialogs.dart';
 import '../theme.dart';
 import '../widgets/app_update_dialog.dart';
 import '../widgets/common_widgets.dart';
+import '../widgets/page_refresh.dart';
 import '../widgets/tiko_tutorial.dart';
 
 class ArticlesPricePage extends StatelessWidget {
@@ -28,8 +30,17 @@ class ArticlesPricePage extends StatelessWidget {
   final AppController controller;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context) => PageRefresh(
+        controller: controller,
+        builder: _buildPage,
+      );
+
+  Widget _buildPage(BuildContext context) {
     final categories = controller.managedArticleCategories;
+    final articlesByCategory = <String, List<Article>>{};
+    for (final article in controller.articles) {
+      articlesByCategory.putIfAbsent(article.category, () => []).add(article);
+    }
     return ListView(
       padding: const EdgeInsets.all(12),
       children: [
@@ -104,7 +115,7 @@ class ArticlesPricePage extends StatelessWidget {
                   ),
                 ),
                 for (final article
-                    in controller.articles.where((a) => a.category == category))
+                    in articlesByCategory[category] ?? const <Article>[])
                   ConfigArticleRow(
                     article: article,
                     onEdit: () => showArticleDialog(context, controller,
@@ -125,7 +136,7 @@ class ArticlesPricePage extends StatelessWidget {
                       }
                     },
                   ),
-                if (!controller.articles.any((a) => a.category == category))
+                if ((articlesByCategory[category] ?? const <Article>[]).isEmpty)
                   const Padding(
                     padding: EdgeInsets.fromLTRB(12, 8, 12, 12),
                     child: Text('Aucun article dans cette catégorie',
@@ -187,7 +198,12 @@ class _ConfigPageState extends State<ConfigPage>
   }
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context) => PageRefresh(
+        controller: widget.controller,
+        builder: _buildPage,
+      );
+
+  Widget _buildPage(BuildContext context) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
@@ -442,8 +458,8 @@ class _ConfigPageState extends State<ConfigPage>
             color: configured ? AppColors.accent : AppColors.warn),
         title: configured ? 'PayPal configuré' : 'PayPal non configuré',
         description: configured
-            ? '${controller.paypalMeLink}\nAu paiement, le QR code redirige directement vers ce compte PayPal avec le montant pré-rempli.'
-            : 'Renseigne ton pseudo PayPal.Me pour proposer au paiement un QR code qui redirige directement vers ton compte avec le montant pré-rempli. Sans configuration, le bouton PayPal enregistre simplement la vente.',
+            ? '${controller.paypalMeLink}\nAu paiement, le QR code ouvre ce compte PayPal ; le client y saisit le montant affiché par Tilly.'
+            : 'Renseigne ton pseudo PayPal.Me pour proposer un QR code qui ouvre ton compte PayPal, où le client saisit le montant. Sans configuration, le bouton PayPal enregistre simplement la vente.',
         action: Wrap(
           spacing: 8,
           runSpacing: 8,
@@ -1029,15 +1045,32 @@ class _AboutInfoRow extends StatelessWidget {
   }
 }
 
-class _AppIconPreview extends StatelessWidget {
+class _AppIconPreview extends StatefulWidget {
   const _AppIconPreview({required this.controller});
 
   final AppController controller;
 
   @override
+  State<_AppIconPreview> createState() => _AppIconPreviewState();
+}
+
+class _AppIconPreviewState extends State<_AppIconPreview> {
+  String? _checkedPath;
+  bool _hasIcon = false;
+
+  // The disk check runs only when the configured path changes.
+  bool _iconExists(String path) {
+    if (path != _checkedPath) {
+      _checkedPath = path;
+      _hasIcon = path.isNotEmpty && File(path).existsSync();
+    }
+    return _hasIcon;
+  }
+
+  @override
   Widget build(BuildContext context) {
-    final iconPath = controller.appIconPath;
-    final hasIcon = iconPath.isNotEmpty && File(iconPath).existsSync();
+    final iconPath = widget.controller.appIconPath;
+    final hasIcon = _iconExists(iconPath);
     return Container(
       width: 72,
       height: 72,
@@ -1051,6 +1084,7 @@ class _AppIconPreview extends StatelessWidget {
           ? Image.file(
               File(iconPath),
               fit: BoxFit.cover,
+              cacheWidth: 216,
               errorBuilder: (_, __, ___) =>
                   Icon(Icons.bolt, color: context.primaryAccent, size: 34),
             )
@@ -1245,150 +1279,218 @@ String _hexColor(Color color) {
   return '#${value.toRadixString(16).padLeft(6, '0').toUpperCase()}';
 }
 
-class HistoryPage extends StatelessWidget {
+class HistoryPage extends StatefulWidget {
   const HistoryPage({required this.controller, super.key});
 
   final AppController controller;
 
   @override
-  Widget build(BuildContext context) {
+  State<HistoryPage> createState() => _HistoryPageState();
+}
+
+class _HistoryPageState extends State<HistoryPage> {
+  final Set<String> _expandedSessions = {};
+  final Map<String, Timer> _collapseTimers = {};
+
+  AppController get controller => widget.controller;
+
+  @override
+  void dispose() {
+    for (final timer in _collapseTimers.values) {
+      timer.cancel();
+    }
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => PageRefresh(
+        controller: controller,
+        builder: _buildPage,
+      );
+
+  Widget _buildPage(BuildContext context) {
+    if (!controller.salesHistoryLoaded) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        controller.ensureAllSessionSalesLoaded();
+      });
+    }
     final activeId = controller.activeSession?.id;
     final sessions = [...controller.sessions]
       ..sort((a, b) => b.eventDate.compareTo(a.eventDate));
-    return ListView(
+    return ListView.builder(
       padding: const EdgeInsets.all(12),
-      children: [
-        SectionTitle(
-          'Historique des événements',
-          trailing: FilledButton.icon(
-            onPressed: () => showCreateSessionDialog(context, controller),
-            icon: const Icon(Icons.add),
-            label: const Text('Nouvelle session'),
+      itemCount: sessions.length + 1,
+      itemBuilder: (context, index) {
+        if (index == 0) {
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              SectionTitle(
+                'Historique des événements',
+                trailing: FilledButton.icon(
+                  onPressed: () =>
+                      showCreateSessionDialog(context, controller),
+                  icon: const Icon(Icons.add),
+                  label: const Text('Nouvelle session'),
+                ),
+              ),
+              if (sessions.isEmpty)
+                const TacticalCard(
+                  child: Center(
+                    child: Padding(
+                      padding: EdgeInsets.all(24),
+                      child: Text('Aucune session enregistrée'),
+                    ),
+                  ),
+                ),
+            ],
+          );
+        }
+        return _buildSessionCard(context, sessions[index - 1], activeId);
+      },
+    );
+  }
+
+  Widget _buildSessionCard(
+      BuildContext context, SessionRecord session, String? activeId) {
+    final expanded = _expandedSessions.contains(session.id);
+    final sessionLoaded = controller.isSessionSalesLoaded(session.id);
+    final sessionSales = controller.salesForSession(session.id);
+    final total =
+        sessionSales.fold<double>(0, (total, sale) => total + sale.total);
+    return Padding(
+      key: ValueKey(session.id),
+      padding: const EdgeInsets.only(bottom: 8),
+      child: TacticalCard(
+        borderColor:
+            session.id == activeId ? context.primaryAccent : AppColors.border,
+        child: ExpansionTile(
+          initiallyExpanded: expanded,
+          onExpansionChanged: (open) => _handleExpansion(session.id, open),
+          tilePadding: EdgeInsets.zero,
+          childrenPadding: const EdgeInsets.only(top: 4),
+          leading: Icon(
+            session.id == activeId ? Icons.radio_button_checked : Icons.history,
+            color:
+                session.id == activeId ? context.primaryAccent : AppColors.muted,
+          ),
+          title: Row(
+            children: [
+              Expanded(
+                  child: Text(session.name,
+                      style: const TextStyle(fontWeight: FontWeight.w900))),
+              if (session.id == activeId)
+                const Chip(
+                    label: Text('Active'),
+                    visualDensity: VisualDensity.compact),
+            ],
+          ),
+          subtitle: Text(sessionLoaded
+              ? '${dateLabel(session.eventDate)} · ${sessionSales.length} vente(s) · ${money(total)}'
+              : '${dateLabel(session.eventDate)} · Chargement…'),
+          trailing: session.id == activeId
+              ? null
+              : OutlinedButton.icon(
+                  onPressed: () async {
+                    await controller.switchSession(session.id);
+                    if (context.mounted) {
+                      snack(context, 'Session chargée');
+                    }
+                  },
+                  icon: const Icon(Icons.login),
+                  label: const Text('Ouvrir'),
+                ),
+          children: expanded
+              ? _expandedChildren(
+                  context, session, sessionLoaded, sessionSales)
+              : const <Widget>[],
+        ),
+      ),
+    );
+  }
+
+  void _handleExpansion(String sessionId, bool open) {
+    _collapseTimers.remove(sessionId)?.cancel();
+    if (open) {
+      setState(() => _expandedSessions.add(sessionId));
+      return;
+    }
+    // Rows are kept during the closing animation, then dropped so collapsed
+    // sessions cost nothing on the next rebuild.
+    _collapseTimers[sessionId] = Timer(kThemeAnimationDuration, () {
+      _collapseTimers.remove(sessionId);
+      if (!mounted) return;
+      setState(() => _expandedSessions.remove(sessionId));
+    });
+  }
+
+  List<Widget> _expandedChildren(BuildContext context, SessionRecord session,
+      bool sessionLoaded, List<Sale> sessionSales) {
+    if (!sessionLoaded) {
+      return const [
+        Padding(
+          padding: EdgeInsets.fromLTRB(8, 0, 8, 10),
+          child: Align(
+            alignment: Alignment.centerLeft,
+            child: Text('Chargement des ventes…',
+                style: TextStyle(color: AppColors.muted)),
           ),
         ),
-        if (sessions.isEmpty)
-          const TacticalCard(
-            child: Center(
-              child: Padding(
-                padding: EdgeInsets.all(24),
-                child: Text('Aucune session enregistrée'),
-              ),
+      ];
+    }
+    return [
+      if (sessionSales.isNotEmpty)
+        Padding(
+          padding: const EdgeInsets.fromLTRB(8, 0, 8, 8),
+          child: Align(
+            alignment: Alignment.centerRight,
+            child: FilledButton.tonalIcon(
+              onPressed: () => exportBilanPdf(context, controller, session),
+              icon: const Icon(Icons.picture_as_pdf),
+              label: const Text('Bilan PDF'),
             ),
           ),
-        for (final session in sessions)
-          Padding(
-            padding: const EdgeInsets.only(bottom: 8),
-            child: TacticalCard(
-              borderColor: session.id == activeId
-                  ? context.primaryAccent
-                  : AppColors.border,
-              child: Builder(
-                builder: (context) {
-                  final sessionSales = controller.salesForSession(session.id);
-                  final total = sessionSales.fold<double>(
-                      0, (total, sale) => total + sale.total);
-                  return ExpansionTile(
-                    tilePadding: EdgeInsets.zero,
-                    childrenPadding: const EdgeInsets.only(top: 4),
-                    leading: Icon(
-                      session.id == activeId
-                          ? Icons.radio_button_checked
-                          : Icons.history,
-                      color: session.id == activeId
-                          ? context.primaryAccent
-                          : AppColors.muted,
-                    ),
-                    title: Row(
-                      children: [
-                        Expanded(
-                            child: Text(session.name,
-                                style: const TextStyle(
-                                    fontWeight: FontWeight.w900))),
-                        if (session.id == activeId)
-                          const Chip(
-                              label: Text('Active'),
-                              visualDensity: VisualDensity.compact),
-                      ],
-                    ),
-                    subtitle: Text(
-                        '${dateLabel(session.eventDate)} · ${sessionSales.length} vente(s) · ${money(total)}'),
-                    trailing: session.id == activeId
-                        ? null
-                        : OutlinedButton.icon(
-                            onPressed: () async {
-                              await controller.switchSession(session.id);
-                              if (context.mounted) {
-                                snack(context, 'Session chargée');
-                              }
-                            },
-                            icon: const Icon(Icons.login),
-                            label: const Text('Ouvrir'),
-                          ),
-                    children: [
-                      if (sessionSales.isNotEmpty)
-                        Padding(
-                          padding: const EdgeInsets.fromLTRB(8, 0, 8, 8),
-                          child: Align(
-                            alignment: Alignment.centerRight,
-                            child: FilledButton.tonalIcon(
-                              onPressed: () =>
-                                  exportBilanPdf(context, controller, session),
-                              icon: const Icon(Icons.picture_as_pdf),
-                              label: const Text('Bilan PDF'),
-                            ),
-                          ),
-                        ),
-                      if (session.helloassoEventUrl.isNotEmpty)
-                        ListTile(
-                          dense: true,
-                          contentPadding:
-                              const EdgeInsets.symmetric(horizontal: 8),
-                          leading:
-                              const Icon(Icons.link, color: AppColors.accent2),
-                          title: Text(session.helloassoEventName.isEmpty
-                              ? 'Événement HelloAsso'
-                              : session.helloassoEventName),
-                          subtitle: Text(session.helloassoEventUrl,
-                              maxLines: 1, overflow: TextOverflow.ellipsis),
-                        ),
-                      if (sessionSales.isEmpty)
-                        const Padding(
-                          padding: EdgeInsets.fromLTRB(8, 0, 8, 10),
-                          child: Align(
-                            alignment: Alignment.centerLeft,
-                            child: Text('Aucune vente sur cette session',
-                                style: TextStyle(color: AppColors.muted)),
-                          ),
-                        )
-                      else
-                        for (final sale in sessionSales.reversed)
-                          ListTile(
-                            dense: true,
-                            contentPadding:
-                                const EdgeInsets.symmetric(horizontal: 8),
-                            title: Text(
-                              sale.items
-                                  .map((item) =>
-                                      '${item.quantity}x ${item.name}')
-                                  .join(' · '),
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                            ),
-                            subtitle: Text(
-                                '${sale.playerName} · ${timeLabel(sale.createdAt)} · ${sale.payment}${sale.donation > 0 ? ' · don ${money(sale.donation)}' : ''}'),
-                            trailing: Text(money(sale.total),
-                                style: TextStyle(
-                                    color: context.primaryAccent,
-                                    fontWeight: FontWeight.w900)),
-                          ),
-                    ],
-                  );
-                },
-              ),
-            ),
+        ),
+      if (session.helloassoEventUrl.isNotEmpty)
+        ListTile(
+          dense: true,
+          contentPadding: const EdgeInsets.symmetric(horizontal: 8),
+          leading: const Icon(Icons.link, color: AppColors.accent2),
+          title: Text(session.helloassoEventName.isEmpty
+              ? 'Événement HelloAsso'
+              : session.helloassoEventName),
+          subtitle: Text(session.helloassoEventUrl,
+              maxLines: 1, overflow: TextOverflow.ellipsis),
+        ),
+      if (sessionSales.isEmpty)
+        const Padding(
+          padding: EdgeInsets.fromLTRB(8, 0, 8, 10),
+          child: Align(
+            alignment: Alignment.centerLeft,
+            child: Text('Aucune vente sur cette session',
+                style: TextStyle(color: AppColors.muted)),
           ),
-      ],
-    );
+        )
+      else
+        for (final sale in sessionSales.reversed)
+          ListTile(
+            dense: true,
+            contentPadding: const EdgeInsets.symmetric(horizontal: 8),
+            title: Text(
+              sale.items
+                  .map((item) => '${item.quantity}x ${item.name}')
+                  .join(' · '),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
+            subtitle: Text(
+                '${sale.playerName} · ${timeLabel(sale.createdAt)} · ${sale.payment}${sale.donation > 0 ? ' · don ${money(sale.donation)}' : ''}'),
+            trailing: Text(money(sale.total),
+                style: TextStyle(
+                    color: context.primaryAccent,
+                    fontWeight: FontWeight.w900)),
+          ),
+    ];
   }
 }
 

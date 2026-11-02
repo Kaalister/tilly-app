@@ -1,5 +1,6 @@
 import 'dart:io';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
 import '../config/app_config.dart';
@@ -21,6 +22,7 @@ import 'theme.dart';
 import 'widgets/app_update_dialog.dart';
 import 'widgets/common_widgets.dart';
 import 'widgets/license_banner.dart';
+import 'widgets/page_refresh.dart';
 import 'widgets/tiko_tutorial.dart';
 
 class RootShell extends StatefulWidget {
@@ -37,9 +39,18 @@ class RootShell extends StatefulWidget {
   State<RootShell> createState() => _RootShellState();
 }
 
+class _AppUpdateState {
+  const _AppUpdateState({this.result, this.checking = false});
+
+  final AppUpdateResult? result;
+  final bool checking;
+}
+
 class _RootShellState extends State<RootShell> {
-  AppUpdateResult? updateResult;
-  bool checkingUpdate = false;
+  final ValueNotifier<_AppUpdateState> _updateState =
+      ValueNotifier(const _AppUpdateState());
+  late final Listenable _shellListenable;
+  late final List<_ShellDestination> _destinations;
   bool _tutorialTourQueued = false;
   bool _tutorialTourRunning = false;
   bool _welcomeDialogShown = false;
@@ -49,26 +60,38 @@ class _RootShellState extends State<RootShell> {
 
   AppController get controller => widget.controller;
   LicenseService get licenseService => widget.licenseService;
+  AppUpdateResult? get updateResult => _updateState.value.result;
 
   @override
   void initState() {
     super.initState();
+    _shellListenable =
+        Listenable.merge([controller, licenseService, _updateState]);
+    _destinations = _shellDestinations(
+      controller,
+      licenseService: licenseService,
+      updateState: _updateState,
+      onCheckUpdate: _checkForUpdate,
+    );
     controller.load();
     _checkForUpdate();
+  }
+
+  @override
+  void dispose() {
+    _updateState.dispose();
+    super.dispose();
   }
 
   Future<void> _checkForUpdate() async {
     if (!updateCheckEnabled || !AppUpdateService.supportedPlatform) {
       return;
     }
-    setState(() => checkingUpdate = true);
+    _updateState.value = const _AppUpdateState(checking: true);
     final result =
         await AppUpdateService.check(authToken: licenseService.authToken);
     if (!mounted) return;
-    setState(() {
-      updateResult = result;
-      checkingUpdate = false;
-    });
+    _updateState.value = _AppUpdateState(result: result);
   }
 
   Future<void> _reconnectLicense() async {
@@ -80,10 +103,17 @@ class _RootShellState extends State<RootShell> {
     if (result.error != null) snack(context, result.error!);
   }
 
+  void _syncReadOnly(bool readOnly) {
+    if (controller.readOnly == readOnly) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) controller.setReadOnly(readOnly);
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
     return AnimatedBuilder(
-      animation: Listenable.merge([controller, licenseService]),
+      animation: _shellListenable,
       builder: (context, _) {
         if (controller.loading) {
           return const Scaffold(
@@ -104,12 +134,8 @@ class _RootShellState extends State<RootShell> {
             controller: controller,
           );
         }
-        controller.readOnly = readOnly;
-        final allDestinations = _shellDestinations(controller,
-            licenseService: licenseService,
-            updateResult: updateResult,
-            checkingUpdate: checkingUpdate,
-            onCheckUpdate: _checkForUpdate);
+        _syncReadOnly(readOnly);
+        final allDestinations = _destinations;
         final destinations = allDestinations
             .where((destination) => _isShellDestinationVisible(
                 controller, destination))
@@ -143,7 +169,11 @@ class _RootShellState extends State<RootShell> {
         final body = IndexedStack(
           index: stackIndex,
           children: [
-            for (final destination in allDestinations) destination.page,
+            for (var index = 0; index < allDestinations.length; index++)
+              ActivePageScope(
+                active: index == stackIndex,
+                child: allDestinations[index].page,
+              ),
           ],
         );
         final readOnly = licenseService.isReadOnly;
@@ -358,7 +388,9 @@ class _RootShellState extends State<RootShell> {
     }
 
     final tourDestinations = _firstLaunchTourDestinations(destinations);
+    var tourStep = 0;
     for (final destination in tourDestinations) {
+      tourStep += 1;
       if (!mounted) return;
       if (controller.tab != destination.tabIndex) {
         controller.setTab(destination.tabIndex);
@@ -370,6 +402,8 @@ class _RootShellState extends State<RootShell> {
         primaryActionLabel: destination.id == AppTabIds.articles
             ? 'Créer mon premier article'
             : 'Continuer',
+        tourStep: tourStep,
+        tourStepCount: tourDestinations.length,
       );
       if (!completed || !mounted) break;
     }
@@ -404,12 +438,16 @@ class _RootShellState extends State<RootShell> {
   Future<bool> _showTikoDialog(
     TikoTutorialContent content, {
     String primaryActionLabel = 'Compris',
+    int? tourStep,
+    int? tourStepCount,
   }) async {
     return await showDialog<bool>(
           context: context,
           builder: (context) => TikoTutorialDialog(
             content: content,
             primaryActionLabel: primaryActionLabel,
+            tourStep: tourStep,
+            tourStepCount: tourStepCount,
           ),
         ) ??
         false;
@@ -649,8 +687,7 @@ bool _isShellDestinationVisible(
 List<_ShellDestination> _shellDestinations(
   AppController controller, {
   required LicenseService licenseService,
-  required AppUpdateResult? updateResult,
-  required bool checkingUpdate,
+  required ValueListenable<_AppUpdateState> updateState,
   required VoidCallback onCheckUpdate,
 }) {
   return [
@@ -715,26 +752,47 @@ List<_ShellDestination> _shellDestinations(
       tabIndex: 8,
       icon: Icons.settings,
       label: 'Config',
-      page: ConfigPage(
-        controller: controller,
-        licenseService: licenseService,
-        updateResult: updateResult,
-        checkingUpdate: checkingUpdate,
-        onCheckUpdate: onCheckUpdate,
+      page: ValueListenableBuilder<_AppUpdateState>(
+        valueListenable: updateState,
+        builder: (context, state, _) => ConfigPage(
+          controller: controller,
+          licenseService: licenseService,
+          updateResult: state.result,
+          checkingUpdate: state.checking,
+          onCheckUpdate: onCheckUpdate,
+        ),
       ),
     ),
   ];
 }
 
-class _AppTitleIcon extends StatelessWidget {
+class _AppTitleIcon extends StatefulWidget {
   const _AppTitleIcon({required this.controller});
 
   final AppController controller;
 
   @override
+  State<_AppTitleIcon> createState() => _AppTitleIconState();
+}
+
+class _AppTitleIconState extends State<_AppTitleIcon> {
+  String? _checkedPath;
+  bool _hasIcon = false;
+
+  // The disk check runs only when the configured path changes: this widget is
+  // rebuilt on every shell refresh.
+  bool _iconExists(String path) {
+    if (path != _checkedPath) {
+      _checkedPath = path;
+      _hasIcon = path.isNotEmpty && File(path).existsSync();
+    }
+    return _hasIcon;
+  }
+
+  @override
   Widget build(BuildContext context) {
-    final iconPath = controller.appIconPath;
-    if (iconPath.isNotEmpty && File(iconPath).existsSync()) {
+    final iconPath = widget.controller.appIconPath;
+    if (_iconExists(iconPath)) {
       return ClipRRect(
         borderRadius: BorderRadius.circular(6),
         child: Image.file(
@@ -742,6 +800,7 @@ class _AppTitleIcon extends StatelessWidget {
           width: 28,
           height: 28,
           fit: BoxFit.cover,
+          cacheWidth: 84,
           errorBuilder: (_, __, ___) =>
               Icon(Icons.bolt, color: context.primaryAccent),
         ),

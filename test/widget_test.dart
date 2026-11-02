@@ -941,6 +941,17 @@ void main() {
     expect(_helloAssoSettingsFromPayload(sanitized).clientSecret, isEmpty);
   });
 
+  test('Firebase sync only rewrites payloads that still carry the secret', () {
+    final withSecret = _backupPayloadWithHelloAssoSecret('sync-secret');
+
+    expect(FirebaseSyncService.remotePayloadNeedsSanitize(withSecret), isTrue);
+    expect(
+        FirebaseSyncService.remotePayloadNeedsSanitize(
+            FirebaseSyncService.sanitizePayloadForSync(withSecret)),
+        isFalse);
+    expect(FirebaseSyncService.remotePayloadNeedsSanitize(const {}), isFalse);
+  });
+
   test('app settings persist the primary color', () {
     const settings = AppSettings(primaryColorValue: 0xFFFF6B35);
     final restored = AppSettings.fromJson(settings.toJson());
@@ -2143,6 +2154,95 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
+  testWidgets('a hidden tab refreshes with fresh data when it becomes visible',
+      (tester) async {
+    final controller = _MemoryAppController()
+      ..tutorialWelcomeSeen = true
+      ..tutorialPagesSeen = {...AppTabIds.all};
+    tester.view.physicalSize = const Size(1200, 700);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: caisseTheme(AppColors.accent),
+        home: RootShell(
+          controller: controller,
+          licenseService: _MockLicenseService(),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    controller.sales = [testSale()];
+    controller.notifyListeners();
+    await tester.pump();
+
+    await tester.tap(find.descendant(
+      of: find.byType(NavigationRail),
+      matching: find.text('Bilan'),
+    ));
+    await tester.pumpAndSettle();
+
+    expect(
+        find.descendant(
+            of: find.byType(BilanPage), matching: find.text('1 vente(s)')),
+        findsOneWidget,
+        reason: 'the tab rebuilds with fresh data when it becomes visible');
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('history only builds the sales of expanded sessions',
+      (tester) async {
+    final controller = _MemoryAppController();
+    final sessionA = SessionRecord(
+        id: 'session-a', name: 'Jour A', eventDate: DateTime(2026, 7, 16));
+    final sessionB = SessionRecord(
+        id: 'session-b', name: 'Jour B', eventDate: DateTime(2026, 7, 17));
+    controller.sessions = [sessionA, sessionB];
+    controller.activeSession = sessionB;
+    controller.salesBySession = {
+      sessionA.id: [
+        testSale(id: 'sale-a', playerName: 'Alice', items: [testSaleItem()]),
+      ],
+      sessionB.id: [
+        testSale(
+            id: 'sale-b',
+            playerName: 'Bob',
+            items: [testSaleItem(name: 'Eau')]),
+      ],
+    };
+    controller.salesHistoryLoaded = true;
+
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: caisseTheme(AppColors.accent),
+        home: Scaffold(body: HistoryPage(controller: controller)),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('Jour A'), findsOneWidget);
+    expect(find.text('Jour B'), findsOneWidget);
+    expect(find.textContaining('1x Soda'), findsNothing,
+        reason: 'les ventes ne sont pas construites tant que la session est '
+            'repliée');
+
+    await tester.tap(find.text('Jour A'));
+    await tester.pumpAndSettle();
+
+    expect(find.textContaining('1x Soda'), findsOneWidget);
+
+    await tester.tap(find.text('Jour A'));
+    await tester.pumpAndSettle();
+    await tester.pump(kThemeAnimationDuration);
+
+    expect(find.textContaining('1x Soda'), findsNothing,
+        reason: 'les lignes sont libérées après le repli');
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('configuration service help is presented by Tiko',
       (tester) async {
     final controller = _MemoryAppController();
@@ -2303,12 +2403,18 @@ void main() {
 
     expect(controller.tutorialWelcomeSeen, isTrue);
     expect(find.textContaining('La page Vente est le cœur'), findsOneWidget);
+    expect(find.text('1/9'), findsOneWidget,
+        reason: 'le compteur de tour doit être visible dès la première page');
 
     final visitedTabs = <int>{};
+    var tourStep = 0;
     var guard = 0;
     while (
         find.byTooltip('Fermer le tuto').evaluate().isNotEmpty && guard < 12) {
+      tourStep += 1;
       visitedTabs.add(controller.tab);
+      expect(find.text('$tourStep/9'), findsOneWidget,
+          reason: 'la progression du tour doit avancer à chaque page');
       final finalLabel =
           controller.tab == 7 ? 'Créer mon premier article' : 'Continuer';
       await finishCurrentTutorial(finalLabel);
@@ -2780,9 +2886,8 @@ void main() {
 
     expect(find.text('Paiement PayPal'), findsOneWidget);
     expect(find.byType(QrImageView), findsOneWidget);
-    expect(find.text('https://paypal.me/fragaddict/2.00'), findsOneWidget);
-    expect(find.textContaining('le montant de 2,00 € est prérempli'),
-        findsOneWidget);
+    expect(find.text('https://paypal.me/fragaddict'), findsOneWidget);
+    expect(find.textContaining('puis saisit 2,00 €'), findsOneWidget);
     expect(find.text('Paiement reçu'), findsOneWidget);
 
     await tester.tap(find.text('Paiement reçu'));
@@ -3028,7 +3133,7 @@ void main() {
     await tester.tap(find.byTooltip('Tiko explique PayPal'));
     await tester.pumpAndSettle();
 
-    expect(find.textContaining('pré-remplit le montant'), findsOneWidget);
+    expect(find.textContaining('y saisit le montant'), findsOneWidget);
     await tester.tap(find.text('Suivant'));
     await tester.pumpAndSettle();
     await tester.tap(find.text('Suivant'));
@@ -3401,6 +3506,68 @@ testWidgets('player dialog adds participant without email', (tester) async {
     );
 
     expect(find.byKey(const ValueKey('scrollable-cart-items')), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets(
+      'article cards show the cart quantity and the buyer without opening it',
+      (tester) async {
+    final controller = _MemoryAppController()
+      ..players = [
+        Player(id: 'player-1', name: 'Alice Dupont', type: 'public'),
+      ]
+      ..articles = [
+        Article(
+          id: 'drink-1',
+          category: 'BOISSONS',
+          type: 'standard',
+          icon: 'B',
+          name: 'Boisson',
+          price: 2,
+          memberPrice: 1.5,
+          stock: 20,
+          threshold: 5,
+        ),
+      ];
+    controller.selectPlayer(controller.players.first);
+
+    tester.view.physicalSize = const Size(1200, 900);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: caisseTheme(AppColors.accent),
+        home: Scaffold(body: CaissePage(controller: controller)),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    final badge = find.byKey(const ValueKey('cart-qty-drink-1'));
+    expect(badge, findsNothing);
+
+    final articleTile = find.descendant(
+        of: find.byType(ProductsPanel), matching: find.text('Boisson'));
+
+    await tester.tap(articleTile);
+    await tester.pump();
+    expect(badge, findsOneWidget);
+    expect(
+        find.descendant(of: badge, matching: find.text('1')), findsOneWidget);
+
+    await tester.tap(articleTile);
+    await tester.pump();
+    expect(
+        find.descendant(of: badge, matching: find.text('2')), findsOneWidget,
+        reason: 'le compteur sur l\'article évite les doubles ajouts');
+
+    expect(
+        find.descendant(
+            of: find.byType(CartPanel),
+            matching: find.text('Pour Alice Dupont')),
+        findsOneWidget,
+        reason: 'le panier rappelle à qui appartient la vente');
     expect(tester.takeException(), isNull);
   });
 

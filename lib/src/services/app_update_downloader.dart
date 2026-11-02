@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:isolate';
 
 import 'package:crypto/crypto.dart';
 import 'package:http/http.dart' as http;
@@ -30,9 +31,16 @@ class AppUpdateDownloader {
   }
 
   static Future<bool> matchesSha256(File file, String expected) async {
-    if (!await file.exists()) return false;
-    final digest = await sha256.bind(file.openRead()).first;
-    return digest.toString().toLowerCase() == expected.toLowerCase();
+    // Reading and hashing a 100+ MB installer must not run on the UI isolate.
+    final filePath = file.path;
+    final computed = await Isolate.run(() async {
+      final target = File(filePath);
+      if (!await target.exists()) return null;
+      final digest = await sha256.bind(target.openRead()).first;
+      return digest.toString().toLowerCase();
+    });
+    if (computed == null) return false;
+    return computed == expected.toLowerCase();
   }
 
   static Future<File> download(

@@ -7,6 +7,7 @@ import '../../platform/backup_and_links.dart';
 import '../dialogs.dart';
 import '../theme.dart';
 import '../widgets/common_widgets.dart';
+import '../widgets/page_refresh.dart';
 
 class PlayersPage extends StatelessWidget {
   const PlayersPage({required this.controller, super.key});
@@ -14,15 +15,23 @@ class PlayersPage extends StatelessWidget {
   final AppController controller;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context) => PageRefresh(
+        controller: controller,
+        builder: _buildPage,
+      );
+
+  Widget _buildPage(BuildContext context) {
     final salesByPlayer = <String, List<Sale>>{};
     for (final sale in controller.activeSales) {
       salesByPlayer.putIfAbsent(sale.playerId, () => []).add(sale);
     }
+    final totalByPlayer = {
+      for (final entry in salesByPlayer.entries)
+        entry.key:
+            entry.value.fold<double>(0, (total, sale) => total + sale.total),
+    };
     final historyEntries = salesByPlayer.entries.toList()
-      ..sort((a, b) => b.value
-          .fold<double>(0, (s, v) => s + v.total)
-          .compareTo(a.value.fold<double>(0, (s, v) => s + v.total)));
+      ..sort((a, b) => totalByPlayer[b.key]!.compareTo(totalByPlayer[a.key]!));
     final players = [...controller.players]
       ..sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
     return ListView(

@@ -12,17 +12,23 @@ class MachineIdService {
   MachineIdService(this._secureStorage);
 
   final SecureSettingsService _secureStorage;
+  String? _cachedMachineId;
 
   // The machine id identifies this app installation forever. It is generated
   // once and must never be deleted nor regenerated, whatever happens to the
-  // licence or the account.
+  // licence or the account. It is cached in memory because periodic licence
+  // validations must not hit the secure storage on every run.
   Future<String> getOrCreateMachineId() async {
+    final cached = _cachedMachineId;
+    if (cached != null) return cached;
     final stored = await _secureStorage.read(key: _machineIdKey);
     if (stored != null && _isValidMachineId(stored)) {
+      _cachedMachineId = stored;
       return stored;
     }
     final newId = _generateMachineId();
     await _secureStorage.write(key: _machineIdKey, value: newId);
+    _cachedMachineId = newId;
     return newId;
   }
 

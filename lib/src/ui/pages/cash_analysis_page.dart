@@ -5,6 +5,7 @@ import '../../domain/models.dart';
 import '../../exports/pdf_exports.dart';
 import '../theme.dart';
 import '../widgets/common_widgets.dart';
+import '../widgets/page_refresh.dart';
 
 class CashAnalysisPage extends StatelessWidget {
   const CashAnalysisPage({required this.controller, super.key});
@@ -12,7 +13,12 @@ class CashAnalysisPage extends StatelessWidget {
   final AppController controller;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context) => PageRefresh(
+        controller: controller,
+        builder: _buildPage,
+      );
+
+  Widget _buildPage(BuildContext context) {
     final start = controller.cashTotal('start');
     final end = controller.cashTotal('end');
     final cashSales = controller.paymentTotals()['ESP'] ?? 0;

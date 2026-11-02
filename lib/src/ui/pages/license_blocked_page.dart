@@ -65,6 +65,7 @@ class LicenseBlockedPage extends StatelessWidget {
                     'assets/branding/expressions/tiko-locked.png',
                     height: 150,
                     fit: BoxFit.contain,
+                    cacheHeight: 450,
                     errorBuilder: (_, __, ___) => Icon(
                       Icons.lock_outline,
                       size: 96,

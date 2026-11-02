@@ -6,6 +6,7 @@ import 'package:flutter/foundation.dart';
 
 import '../config/app_config.dart';
 import '../data/local_database.dart';
+import '../domain/models.dart';
 import 'firebase_bootstrap.dart';
 
 enum FirebaseSyncAction {
@@ -65,11 +66,14 @@ class FirebaseSyncService {
       if (remote.exists) {
         final data = remote.data() ?? const <String, dynamic>{};
         final remoteUpdatedAt = _remoteUpdatedAt(data);
-        final remotePayload =
+        var payload =
             Map<String, dynamic>.from(data['payload'] as Map? ?? const {});
-        final payload = sanitizePayloadForSync(remotePayload);
-        if (jsonEncode(payload) != jsonEncode(remotePayload)) {
-          await snapshotRef.update({'payload': _jsonSafe(payload)});
+        // The whole payload is only re-encoded when the HelloAsso secret must
+        // actually be stripped: the previous full jsonEncode comparison cost
+        // two serialisations of the entire dataset per sync.
+        if (remotePayloadNeedsSanitize(payload)) {
+          payload = sanitizePayloadForSync(payload);
+          await snapshotRef.update({'payload': payload});
         }
         final shouldPull = payload.isNotEmpty &&
             remoteUpdatedAt != null &&
@@ -104,8 +108,9 @@ class FirebaseSyncService {
 
       final payload = await database.exportAll();
       final updatedAt = localUpdatedAt;
+      // exportAll already returns a freshly decoded JSON-safe payload.
       await snapshotRef.set({
-        'payload': _jsonSafe(payload),
+        'payload': payload,
         'updatedAt': updatedAt.toIso8601String(),
         'updatedAtMillis': updatedAt.millisecondsSinceEpoch,
         'ownerUid': user.uid,
@@ -130,13 +135,32 @@ class FirebaseSyncService {
     return DateTime.tryParse('${data['updatedAt'] ?? ''}');
   }
 
-  Object _jsonSafe(Object value) {
-    return jsonDecode(jsonEncode(value)) as Object;
-  }
-
   static Map<String, dynamic> sanitizePayloadForSync(
           Map<String, dynamic> sourcePayload) =>
       sanitizePortableBackupPayload(sourcePayload);
+
+  /// True when the stored payload still carries a HelloAsso client secret, or
+  /// holds unreadable settings, and must therefore be rewritten. This cheap
+  /// check replaces a full jsonEncode comparison of both payloads.
+  @visibleForTesting
+  static bool remotePayloadNeedsSanitize(Map<String, dynamic> payload) {
+    final data = payload['data'];
+    if (data is! Map) return false;
+    final rows = data['appSettings'];
+    if (rows is! List) return false;
+    for (final row in rows.whereType<Map>()) {
+      if (row['key'] != 'helloasso_settings') continue;
+      try {
+        final settings = HelloAssoSettings.fromJson(
+            Map<String, dynamic>.from(
+                jsonDecode('${row['value'] ?? '{}'}') as Map));
+        return settings.clientSecret.trim().isNotEmpty;
+      } catch (_) {
+        return true;
+      }
+    }
+    return false;
+  }
 
   String _friendlySyncError(Object exception) {
     if (exception is FirebaseException &&

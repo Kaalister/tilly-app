@@ -770,4 +770,26 @@ void main() {
       expect(controller.persistCalls, greaterThan(0));
     });
   });
+
+  group('deferred firebase bootstrap', () {
+    test('refreshes the availability once the bootstrap completes', () {
+      var notifications = 0;
+      controller.addListener(() => notifications++);
+
+      controller.applyDeferredFirebaseBootstrap();
+
+      expect(controller.syncStatus, 'Firebase non configuré');
+      expect(controller.firebaseSettings, const FirebaseSettings());
+      expect(notifications, 1,
+          reason: 'the shell must refresh once the bootstrap completes');
+    });
+
+    test('does not clobber a status produced by a user action', () {
+      controller.syncStatus = 'Modifications locales non synchronisees';
+
+      controller.applyDeferredFirebaseBootstrap();
+
+      expect(controller.syncStatus, 'Modifications locales non synchronisees');
+    });
+  });
 }

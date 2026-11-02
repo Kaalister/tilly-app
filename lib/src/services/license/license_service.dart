@@ -129,8 +129,10 @@ class LicenseService extends ChangeNotifier {
 
   Future<void> _loadPersistedAuth() async {
     try {
-      final token = await _secureStorage.read(key: 'tilly_license_auth_token');
-      final email = await _secureStorage.read(key: 'tilly_license_user_email');
+      final (token, email) = await (
+        _secureStorage.read(key: 'tilly_license_auth_token'),
+        _secureStorage.read(key: 'tilly_license_user_email'),
+      ).wait;
       _authToken = token?.isNotEmpty == true ? token : null;
       _userEmail = email?.isNotEmpty == true ? email : null;
     } catch (_) {}
@@ -151,10 +153,12 @@ class LicenseService extends ChangeNotifier {
   }
 
   Future<void> _checkLicenseOffline() async {
-    final envelope = await _store.loadEnvelope();
-    final stateData = await _store.loadState();
-    final machineId = await _machineIdService.getOrCreateMachineId();
-    final deviceSecret = await _store.getOrCreateDeviceSecret();
+    final (envelope, stateData, machineId, deviceSecret) = await (
+      _store.loadEnvelope(),
+      _store.loadState(),
+      _machineIdService.getOrCreateMachineId(),
+      _store.getOrCreateDeviceSecret(),
+    ).wait;
 
     if (envelope == null) {
       _currentState = LicenseState.noLicense;

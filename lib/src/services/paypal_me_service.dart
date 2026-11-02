@@ -7,6 +7,8 @@ class PaypalMeService {
 
   final http.Client _client;
 
+  void close() => _client.close();
+
   /// Returns true when PayPal confirms the PayPal.Me link exists, false when
   /// PayPal explicitly reports an unknown handle, and null when the check
   /// cannot be performed (offline, timeout, unexpected status).

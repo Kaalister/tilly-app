@@ -6,6 +6,7 @@ import '../../platform/backup_and_links.dart';
 import '../dialogs.dart';
 import '../theme.dart';
 import '../widgets/common_widgets.dart';
+import '../widgets/page_refresh.dart';
 
 class CaissePage extends StatelessWidget {
   const CaissePage({required this.controller, super.key});
@@ -13,7 +14,12 @@ class CaissePage extends StatelessWidget {
   final AppController controller;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context) => PageRefresh(
+        controller: controller,
+        builder: _buildPage,
+      );
+
+  Widget _buildPage(BuildContext context) {
     return LayoutBuilder(
       builder: (context, constraints) {
         final wide = constraints.maxWidth >= 840;
@@ -84,6 +90,7 @@ class _FloatingCartSheetState extends State<_FloatingCartSheet>
   late final Animation<double> _shakeOffset;
   var _isClosed = true;
   var _disableAnimations = false;
+  var _pageActive = true;
 
   @override
   void initState() {
@@ -124,6 +131,7 @@ class _FloatingCartSheetState extends State<_FloatingCartSheet>
   void didChangeDependencies() {
     super.didChangeDependencies();
     _disableAnimations = MediaQuery.of(context).disableAnimations;
+    _pageActive = ActivePageScope.of(context);
     _syncShake();
   }
 
@@ -154,8 +162,10 @@ class _FloatingCartSheetState extends State<_FloatingCartSheet>
   }
 
   void _syncShake() {
-    final shouldShake =
-        !_disableAnimations && _isClosed && widget.cartCount > 0;
+    final shouldShake = _pageActive &&
+        !_disableAnimations &&
+        _isClosed &&
+        widget.cartCount > 0;
     if (shouldShake) {
       if (!_shakeController.isAnimating) {
         _shakeController.repeat();
@@ -174,18 +184,20 @@ class _FloatingCartSheetState extends State<_FloatingCartSheet>
         offset: Offset(0, _shakeOffset.value),
         child: child,
       ),
-      child: DraggableScrollableSheet(
-        controller: _sheetController,
-        minChildSize: _FloatingCartSheet.closedSize,
-        initialChildSize: _FloatingCartSheet.closedSize,
-        maxChildSize: 1,
-        snap: true,
-        snapSizes: const [_FloatingCartSheet.closedSize, 1],
-        builder: (context, scrollController) => CartPanel(
-          controller: widget.controller,
-          floating: true,
-          collapsed: _isClosed,
-          scrollController: scrollController,
+      child: RepaintBoundary(
+        child: DraggableScrollableSheet(
+          controller: _sheetController,
+          minChildSize: _FloatingCartSheet.closedSize,
+          initialChildSize: _FloatingCartSheet.closedSize,
+          maxChildSize: 1,
+          snap: true,
+          snapSizes: const [_FloatingCartSheet.closedSize, 1],
+          builder: (context, scrollController) => CartPanel(
+            controller: widget.controller,
+            floating: true,
+            collapsed: _isClosed,
+            scrollController: scrollController,
+          ),
         ),
       ),
     );
@@ -215,9 +227,15 @@ class _PlayerPanelState extends State<PlayerPanel> {
   @override
   Widget build(BuildContext context) {
     final query = searchController.text.trim().toLowerCase();
-    final filteredPlayers = widget.controller.players
+    final players = widget.controller.players;
+    final filteredPlayers = players
         .where((player) => player.name.toLowerCase().contains(query))
         .toList();
+    final salesCountByPlayer = <String, int>{};
+    for (final sale in widget.controller.activeSales) {
+      salesCountByPlayer[sale.playerId] =
+          (salesCountByPlayer[sale.playerId] ?? 0) + 1;
+    }
     return Padding(
       padding: const EdgeInsets.all(10),
       child: Column(
@@ -277,7 +295,7 @@ class _PlayerPanelState extends State<PlayerPanel> {
           ),
           const SizedBox(height: 8),
           Expanded(
-            child: widget.controller.players.isEmpty
+            child: players.isEmpty
                 ? Center(
                     child: FilledButton.icon(
                       onPressed: () =>
@@ -300,9 +318,7 @@ class _PlayerPanelState extends State<PlayerPanel> {
                           final player = filteredPlayers[index];
                           final selected =
                               widget.controller.selectedPlayerId == player.id;
-                          final count = widget.controller.activeSales
-                              .where((s) => s.playerId == player.id)
-                              .length;
+                          final count = salesCountByPlayer[player.id] ?? 0;
                           return ConstrainedBox(
                             constraints: BoxConstraints(
                                 minWidth: widget.compact ? 190 : 0,
@@ -377,6 +393,13 @@ class ProductsPanel extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final categories = controller.categories;
+    final memberTariff = controller.memberTariff;
+    final visibleArticles = controller.visibleArticles;
+    final hasSelectedPlayer = controller.selectedPlayerId != null;
+    final cartQuantities = <String, int>{
+      for (final item in controller.cart) item.articleId: item.quantity,
+    };
     return Column(
       children: [
         SizedBox(
@@ -384,10 +407,10 @@ class ProductsPanel extends StatelessWidget {
           child: ListView.separated(
             padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 9),
             scrollDirection: Axis.horizontal,
-            itemCount: controller.categories.length,
+            itemCount: categories.length,
             separatorBuilder: (_, __) => const SizedBox(width: 8),
             itemBuilder: (context, index) {
-              final cat = controller.categories[index];
+              final cat = categories[index];
               final selected = controller.categoryFilter == cat;
               return ChoiceChip(
                 selected: selected,
@@ -412,19 +435,20 @@ class ProductsPanel extends StatelessWidget {
               crossAxisSpacing: 8,
               mainAxisSpacing: 8,
             ),
-            itemCount: controller.visibleArticles.length,
+            itemCount: visibleArticles.length,
             itemBuilder: (context, index) {
-              final article = controller.visibleArticles[index];
-              final price = article.priceFor(controller.memberTariff);
+              final article = visibleArticles[index];
+              final price = article.priceFor(memberTariff);
               final noStock = article.tracksStock && article.stock == 0;
               final lowStock = article.tracksStock &&
                   article.stock > 0 &&
                   article.stock <= article.threshold;
+              final quantity = cartQuantities[article.id] ?? 0;
               return InkWell(
                 borderRadius: BorderRadius.circular(8),
-                onTap: controller.selectedPlayerId == null
-                    ? () => snack(context, 'Sélectionnez un participant')
-                    : () => controller.addToCart(article),
+                onTap: hasSelectedPlayer
+                    ? () => controller.addToCart(article)
+                    : () => snack(context, 'Sélectionnez un participant'),
                 child: TacticalCard(
                   borderColor: noStock
                       ? AppColors.danger
@@ -438,6 +462,30 @@ class ProductsPanel extends StatelessWidget {
                     children: [
                       Row(
                         children: [
+                          if (quantity > 0)
+                            Container(
+                              key: ValueKey('cart-qty-${article.id}'),
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 7, vertical: 2),
+                              decoration: BoxDecoration(
+                                color: context.primaryAccent,
+                                borderRadius: BorderRadius.circular(20),
+                              ),
+                              child: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Icon(Icons.shopping_cart,
+                                      size: 11,
+                                      color: context.onPrimaryAccent),
+                                  const SizedBox(width: 3),
+                                  Text('$quantity',
+                                      style: TextStyle(
+                                          color: context.onPrimaryAccent,
+                                          fontSize: 12,
+                                          fontWeight: FontWeight.w900)),
+                                ],
+                              ),
+                            ),
                           const Spacer(),
                           if (article.tracksStock)
                             Container(
@@ -486,7 +534,7 @@ class ProductsPanel extends StatelessWidget {
                                     color: context.primaryAccent,
                                     fontWeight: FontWeight.w900)),
                           ),
-                          if (controller.memberTariff &&
+                          if (memberTariff &&
                               article.memberPrice > 0) ...[
                             const SizedBox(width: 4),
                             Container(
@@ -636,19 +684,45 @@ class CartPanel extends StatelessWidget {
   }
 
   Widget _buildHeader(BuildContext context) {
-    return Row(
+    final player = controller.selectedPlayer;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        Icon(Icons.shopping_cart, color: context.primaryAccent),
-        const SizedBox(width: 8),
-        Text('PANIER (${controller.cartCount})',
-            style: const TextStyle(
-                fontWeight: FontWeight.w900, letterSpacing: 1.2)),
-        const Spacer(),
-        Text(money(controller.cartTotal),
-            style: TextStyle(
-                color: context.primaryAccent,
-                fontWeight: FontWeight.w900,
-                fontSize: 18)),
+        Row(
+          children: [
+            Icon(Icons.shopping_cart, color: context.primaryAccent),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text('PANIER (${controller.cartCount})',
+                  style: const TextStyle(
+                      fontWeight: FontWeight.w900, letterSpacing: 1.2)),
+            ),
+            Text(money(controller.cartTotal),
+                style: TextStyle(
+                    color: context.primaryAccent,
+                    fontWeight: FontWeight.w900,
+                    fontSize: 18)),
+          ],
+        ),
+        if (player != null)
+          Padding(
+            padding: const EdgeInsets.only(top: 2),
+            child: Row(
+              children: [
+                const Icon(Icons.person, size: 14, color: AppColors.muted),
+                const SizedBox(width: 4),
+                Expanded(
+                  child: Text('Pour ${player.name}',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                          color: AppColors.muted,
+                          fontSize: 12,
+                          fontWeight: FontWeight.w700)),
+                ),
+              ],
+            ),
+          ),
       ],
     );
   }
@@ -675,7 +749,8 @@ class CartPanel extends StatelessWidget {
   }
 
   Widget _buildCartList(BuildContext context) {
-    if (controller.cart.isEmpty) {
+    final cart = controller.cart;
+    if (cart.isEmpty) {
       return SizedBox(
         height: 72,
         child: Center(
@@ -686,11 +761,12 @@ class CartPanel extends StatelessWidget {
         ),
       );
     }
-    if (controller.cart.length <= _maxVisibleCartItems) {
+    final articlesById = {for (final article in controller.articles) article.id: article};
+    if (cart.length <= _maxVisibleCartItems) {
       return Column(
         children: [
-          for (var index = 0; index < controller.cart.length; index++)
-            _buildCartItem(context, index),
+          for (var index = 0; index < cart.length; index++)
+            _buildCartItem(context, index, articlesById),
         ],
       );
     }
@@ -701,17 +777,19 @@ class CartPanel extends StatelessWidget {
         child: ListView.builder(
           primary: false,
           padding: EdgeInsets.zero,
-          itemCount: controller.cart.length,
-          itemBuilder: _buildCartItem,
+          itemCount: cart.length,
+          itemBuilder: (context, index) =>
+              _buildCartItem(context, index, articlesById),
         ),
       ),
     );
   }
 
-  Widget _buildCartItem(BuildContext context, int index) {
+  Widget _buildCartItem(
+      BuildContext context, int index, Map<String, Article> articlesById) {
     final item = controller.cart[index];
-    final article =
-        controller.articles.firstWhere((a) => a.id == item.articleId);
+    final article = articlesById[item.articleId];
+    if (article == null) return const SizedBox.shrink();
     return Padding(
       padding: const EdgeInsets.only(bottom: 6),
       child: TacticalCard(

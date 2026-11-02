@@ -67,6 +67,9 @@ class AppController extends ChangeNotifier implements PersistableAppState {
   @override
   List<Sale> sales = [];
   Map<String, List<Sale>> salesBySession = {};
+  bool salesHistoryLoaded = false;
+  bool _salesHistoryLoading = false;
+  int _dataGeneration = 0;
   @override
   List<MealOrder> meals = [];
   List<StockMovement> stockMovements = [];
@@ -216,7 +219,7 @@ List<String> get allArticleCategories => articleCategories;
     sales = await _database.loadSales(activeSession!.id);
     meals = await _database.loadMeals(activeSession!.id);
     stockMovements = await _database.loadStockMovements(activeSession!.id);
-    await refreshSessionSales();
+    _resetSessionSalesCache();
     cashStart = await _database.loadCash(activeSession!.id, 'start');
     cashEnd = await _database.loadCash(activeSession!.id, 'end');
     cart.clear();
@@ -335,7 +338,7 @@ List<String> get allArticleCategories => articleCategories;
         helloAssoSettings = await _secureSettings
             .loadHelloAssoSettings(storedHelloAssoSettings, scope: _dataScope);
         await _loadActiveSessionState();
-        await refreshSessionSales();
+        _resetSessionSalesCache();
       }
       return result;
     } finally {
@@ -393,6 +396,20 @@ List<String> get allArticleCategories => articleCategories;
     if (result.syncedAt != null) lastSyncedAt = result.syncedAt;
   }
 
+  /// Refreshes the Firebase availability once the deferred bootstrap finished
+  /// (monitoring and sync are initialized after the first frame).
+  void applyDeferredFirebaseBootstrap() {
+    firebaseSettings = FirebaseBootstrap.settings ?? const FirebaseSettings();
+    if (syncStatus == 'Firebase prêt' ||
+        syncStatus == 'Firebase non configuré' ||
+        syncStatus == 'Configuration Firebase à compléter') {
+      syncStatus = FirebaseBootstrap.initialized
+          ? 'Firebase prêt'
+          : (FirebaseBootstrap.error ?? 'Firebase non configuré');
+    }
+    notifyListeners();
+  }
+
   Future<void> disconnectFirebase() async {
     FirebaseMonitoringService.logAction('firebase_user_disconnect_requested',
         context: {'tab': _tabId(tab)});
@@ -446,13 +463,49 @@ List<String> get allArticleCategories => articleCategories;
     }
   }
 
-  Future<void> refreshSessionSales() async {
-    salesBySession = {
-      for (final session in sessions)
-        session.id: await _database.loadSales(session.id),
-    };
-    _cacheActiveSessionSales();
+  /// Loads (once) the sales of every session for the history screen. Kept lazy
+  /// so a long history does not slow down the app startup.
+  Future<void> ensureAllSessionSalesLoaded() async {
+    if (salesHistoryLoaded || _salesHistoryLoading) return;
+    _salesHistoryLoading = true;
+    final generation = _dataGeneration;
+    notifyListeners();
+    try {
+      for (final session in sessions) {
+        if (salesBySession.containsKey(session.id)) continue;
+        final loaded = await _database.loadSales(session.id);
+        if (generation != _dataGeneration) return;
+        salesBySession[session.id] = loaded;
+      }
+      salesHistoryLoaded = true;
+    } catch (error, stackTrace) {
+      salesHistoryLoaded = true;
+      await FirebaseMonitoringService.recordError(error, stackTrace);
+    } finally {
+      _salesHistoryLoading = false;
+      if (generation == _dataGeneration) notifyListeners();
+    }
   }
+
+  Future<void> ensureSessionSalesLoaded(String sessionId) async {
+    if (salesBySession.containsKey(sessionId)) return;
+    final generation = _dataGeneration;
+    final loaded = await _database.loadSales(sessionId);
+    if (generation != _dataGeneration) return;
+    salesBySession[sessionId] = loaded;
+    notifyListeners();
+  }
+
+  void _resetSessionSalesCache() {
+    _dataGeneration++;
+    salesBySession = {};
+    _cacheActiveSessionSales();
+    salesHistoryLoaded = false;
+    _salesHistoryLoading = false;
+  }
+
+  bool isSessionSalesLoaded(String sessionId) =>
+      salesBySession.containsKey(sessionId);
 
   List<Sale> salesForSession(String sessionId) {
     final sessionSales = salesBySession[sessionId] ??
@@ -572,6 +625,12 @@ List<String> get allArticleCategories => articleCategories;
     final tabId = _tabId(value);
     FirebaseMonitoringService.setContextKey('current_tab', tabId);
     FirebaseMonitoringService.logAction('tab_opened', context: {'tab': tabId});
+    notifyListeners();
+  }
+
+  void setReadOnly(bool value) {
+    if (readOnly == value) return;
+    readOnly = value;
     notifyListeners();
   }
 
@@ -1445,6 +1504,12 @@ List<String> get allArticleCategories => articleCategories;
         includeConfiguration: includeConfiguration);
     FirebaseMonitoringService.logAction('backup_export_finished');
     return payload;
+  }
+
+  @override
+  void dispose() {
+    _paypalMe.close();
+    super.dispose();
   }
 }
 

@@ -80,7 +80,7 @@ TikoTutorialContent tikoPaypalHelpTutorial() => const TikoTutorialContent(
         _tikoThinkingAsset,
       ],
       messages: [
-        'Avec PayPal, tu proposes un QR code à scanner : il redirige directement sur ton compte PayPal et pré-remplit le montant à payer. Tu gagnes du temps à l\'encaissement.',
+        'Avec PayPal, tu affiches un QR code : le client le scanne, arrive sur ton compte PayPal et y saisit le montant indiqué par Tilly.',
         'Tu peux utiliser le bouton PayPal sans configuration : dans ce cas, il enregistre simplement la vente en PayPal.',
         'Pour trouver ton pseudo : connecte-toi sur paypal.fr, ouvre les paramètres du compte puis « Profil PayPal.Me ». Ton pseudo est la fin de ton lien, par exemple paypal.me/tillyorceus.',
         'Saisis ce pseudo dans Configurer puis appuie sur Vérifier : Tilly confirme que le compte existe avant d\'enregistrer. Aucun identifiant PayPal n\'est conservé.',
@@ -199,10 +199,10 @@ TikoTutorialContent tikoTutorialForTab(String tabId) {
           _tikoSuccessAsset
         ],
         messages: [
-          'Pour utiliser les repas, il faut que le module Repas soit actif, qu\'un participant existe et qu\'un article soit rangé dans la catégorie REPAS.',
-          'Si le bouton Ajouter est bloqué, c\'est qu\'il manque encore un participant ou un article REPAS disponible.',
-          'Quand tu crées un repas, choisis le participant, l\'origine de la commande, la formule, la boisson, le snack, les sauces et une note si besoin.',
-          'Un repas marqué À préparer ne retire pas encore le stock, alors qu\'un repas marqué Préparé retire les éléments sélectionnés.',
+          'Repas suit chaque commande de l\'inscription à l\'assiette : À préparer, Préparé, puis Servi, avec les compteurs en haut.',
+          'Filtre par statut ou cherche un nom pour préparer en série; chaque commande peut être préparée, servie, modifiée ou annulée.',
+          'À la création, tu composes la formule : participant, paiement, repas, boisson, snack, sauces et note.',
+          'Préparé retire les éléments du stock, À préparer les garde pour plus tard. Bouton Ajouter bloqué ? Il manque un participant ou un article REPAS.',
         ],
       );
     case AppTabIds.players:
@@ -247,10 +247,10 @@ TikoTutorialContent tikoTutorialForTab(String tabId) {
           _tikoTipAsset
         ],
         messages: [
-          'Les statistiques deviennent utiles dès que tu as enregistré des ventes, préparé des repas ou saisi des sorties association.',
-          'Les cartes Ruptures et En alerte se basent sur le stock restant et sur le seuil que tu as défini dans Articles.',
-          'Chaque ligne d\'article te montre ce qui a été vendu, utilisé dans les repas, sorti pour l\'association, ainsi que le chiffre d\'affaires et le stock restant.',
-          'Si une alerte te paraît étrange, commence par vérifier le stock et le seuil de l\'article concerné.',
+          'Stats te dit quoi racheter : Ruptures, En alerte et À réappro surveillent ton stock en direct.',
+          'Pour chaque article, tu suis ce qui est vendu, utilisé dans les repas, sorti pour l\'asso, le chiffre d\'affaires et le stock restant.',
+          'La barre de rotation et la suggestion d\'achat t\'indiquent quoi reprendre, et en quelle quantité.',
+          'Un chiffre te paraît étrange ? Vérifie le stock et le seuil dans Articles. Le bouton Exporter crée un PDF pour ta liste de réappro.',
         ],
       );
     case AppTabIds.bilan:
@@ -263,10 +263,10 @@ TikoTutorialContent tikoTutorialForTab(String tabId) {
           _tikoTipAsset
         ],
         messages: [
-          'Le bilan résume la session active en séparant les espèces, PayPal, SumUp, les dons, le total et le nombre de ventes.',
-          'La section Stock vendu regroupe les articles passés en caisse, tandis que les repas préparés se contrôlent plutôt dans les statistiques de stock.',
-          'Avant de générer le PDF, vérifie que les ventes annulées sont correctes et que la caisse espèces a bien été comptée.',
-          'Quand tout est cohérent, exporte le PDF pour garder une trace propre de la journée.',
+          'Bilan fait les comptes de la journée : espèces, PayPal, SumUp, dons, total et nombre de ventes, tout est séparé.',
+          'La section Stock vendu liste les articles partis en caisse, avec les quantités et leur part du chiffre d\'affaires.',
+          'Avant d\'exporter, vérifie que les ventes annulées sont correctes et que la caisse espèces a bien été comptée.',
+          'Le bouton PDF génère le bilan complet de la session, prêt à garder ou à transmettre.',
         ],
       );
     case AppTabIds.history:
@@ -279,7 +279,7 @@ TikoTutorialContent tikoTutorialForTab(String tabId) {
           _tikoSuccessAsset
         ],
         messages: [
-          'Une session correspond à un événement ou à une journée de vente, et Tilly sépare les ventes, les repas, la caisse et les bilans pour chacune.',
+          'Chaque événement a sa propre session : ventes, repas, caisse et bilan restent séparés, et tu passes de l\'un à l\'autre en un clic.',
           'Quand tu prépares un nouvel événement, crée une nouvelle session et donne-lui un nom clair avant le premier encaissement.',
           'Lorsque tu ouvres une ancienne session, elle redevient active; les prochains encaissements seront donc enregistrés dedans.',
           'Depuis une session qui contient des ventes, tu peux aussi générer son bilan PDF.',
@@ -311,13 +311,15 @@ TikoTutorialContent tikoTutorialForTab(String tabId) {
           _tikoThinkingAsset,
           _tikoTipAsset,
           _tikoSuccessAsset,
-          _tikoSurprisedAsset
+          _tikoSurprisedAsset,
+          _tikoTipAsset
         ],
         messages: [
-          'Dans Personnalisation, tu peux changer le nom, l\'image, la couleur et les onglets visibles sans supprimer les données des onglets masqués.',
-          'La partie HelloAsso sert à préparer les imports et les événements, tandis que la partie Synchronisation permet de retrouver les données sur un autre appareil.',
-          'La partie Sauvegarde exporte toutes les données locales, et je te conseille d\'en faire une avant une mise à jour ou une restauration.',
-          'La remise à zéro efface les données métier, donc utilise-la seulement après une sauvegarde et jamais au milieu des encaissements.',
+          'Config, c\'est ton poste de commandement : six onglets pour adapter Tilly à ton association, sans jamais risquer tes ventes.',
+          'Personnalisation : affiche le nom et le logo de ton asso, choisis ta couleur, garde seulement les onglets utiles et active le module Repas.',
+          'Comptes & services : gère ton compte Tilly, branche PayPal pour encaisser en QR code, HelloAsso pour importer les inscrits, et active la synchronisation entre appareils.',
+          'Mises à jour : installe la dernière version en un clic. Sauvegarde : exporte toutes tes données en un fichier, avant une mise à jour ou un changement d\'appareil.',
+          'Remise à zéro : repars sur une base propre après une sauvegarde. À propos : la version installée et les infos de l\'application.',
         ],
       );
     case AppTabIds.sales:
@@ -373,6 +375,7 @@ class TikoTutorialButton extends StatelessWidget {
                 width: 40,
                 height: 40,
                 fit: BoxFit.cover,
+                cacheWidth: 120,
                 errorBuilder: (_, __, ___) => Icon(
                   Icons.help_outline,
                   color: context.primaryAccent,
@@ -409,6 +412,7 @@ class TikoHelpButton extends StatelessWidget {
             width: 28,
             height: 28,
             fit: BoxFit.cover,
+            cacheWidth: 84,
             errorBuilder: (_, __, ___) => Icon(
               Icons.assistant,
               color: context.primaryAccent,
@@ -426,11 +430,17 @@ class TikoTutorialDialog extends StatefulWidget {
   const TikoTutorialDialog({
     required this.content,
     this.primaryActionLabel = 'Compris',
+    this.tourStep,
+    this.tourStepCount,
     super.key,
   });
 
   final TikoTutorialContent content;
   final String primaryActionLabel;
+
+  /// Position of this dialog in the first-launch tour, shown as `3/9`.
+  final int? tourStep;
+  final int? tourStepCount;
 
   @override
   State<TikoTutorialDialog> createState() => _TikoTutorialDialogState();
@@ -489,6 +499,9 @@ class _TikoTutorialDialogState extends State<TikoTutorialDialog> {
                         key: ValueKey(content.assetForStep(_step)),
                         width: tikoWidth,
                         fit: BoxFit.contain,
+                        cacheWidth:
+                            (tikoWidth * MediaQuery.devicePixelRatioOf(context))
+                                .round(),
                         errorBuilder: (_, __, ___) => Icon(
                           Icons.assistant,
                           size: tikoWidth * .5,
@@ -509,6 +522,8 @@ class _TikoTutorialDialogState extends State<TikoTutorialDialog> {
                       text: content.messages[_step],
                       step: _step,
                       stepCount: content.messages.length,
+                      tourStep: widget.tourStep,
+                      tourStepCount: widget.tourStepCount,
                       actionLabel:
                           _isLastStep ? widget.primaryActionLabel : 'Suivant',
                       onPressed: _advance,
@@ -541,6 +556,8 @@ class _TikoSpeechBubble extends StatelessWidget {
     required this.stepCount,
     required this.actionLabel,
     required this.onPressed,
+    this.tourStep,
+    this.tourStepCount,
   });
 
   final String title;
@@ -549,6 +566,8 @@ class _TikoSpeechBubble extends StatelessWidget {
   final int stepCount;
   final String actionLabel;
   final VoidCallback onPressed;
+  final int? tourStep;
+  final int? tourStepCount;
 
   @override
   Widget build(BuildContext context) {
@@ -580,7 +599,29 @@ class _TikoSpeechBubble extends StatelessWidget {
                   const SizedBox(height: 14),
                   Row(
                     children: [
-                      _StepDots(current: step, count: stepCount),
+                      if (stepCount > 1) ...[
+                        _StepDots(current: step, count: stepCount),
+                        const SizedBox(width: 8),
+                      ],
+                      if (tourStep != null && tourStepCount != null)
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 8, vertical: 3),
+                          decoration: BoxDecoration(
+                            color: AppColors.surface,
+                            borderRadius: BorderRadius.circular(999),
+                            border: Border.all(color: AppColors.border),
+                          ),
+                          child: Text(
+                            '$tourStep/$tourStepCount',
+                            style: const TextStyle(
+                              color: AppColors.muted,
+                              fontSize: 12,
+                              fontWeight: FontWeight.w900,
+                              letterSpacing: .5,
+                            ),
+                          ),
+                        ),
                       const SizedBox(width: 8),
                       Expanded(
                         child: Align(
